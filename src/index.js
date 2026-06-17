@@ -1,4 +1,5 @@
 import { InteractionType, InteractionResponseType, verifyKey } from 'discord-interactions';
+import { handlePreview } from './preview.js';
 
 export default {
   async fetch(request, env, ctx) {

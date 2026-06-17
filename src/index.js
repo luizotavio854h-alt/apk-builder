@@ -1,19 +1,12 @@
-
-index_definitivo.js
 import { InteractionType, InteractionResponseType, verifyKey } from 'discord-interactions';
 
 export default {
   async fetch(request, env, ctx) {
-    console.log('Receiving request:', request.method, request.url);
-    if (request.method !== 'POST') {
-      return new Response('Not Found', { status: 404 });
-    }
-
+    // 1. Endpoint de Callback (GitHub -> Worker)
     const url = new URL(request.url);
     if (url.pathname === '/build-callback') {
       const authHeader = request.headers.get('Authorization');
       if (!authHeader || authHeader !== `Bearer ${env.DISCORD_BOT_TOKEN}`) {
-        console.log('Build callback: Unauthorized attempt');
         return new Response('Unauthorized', { status: 401 });
       }
       try {
@@ -21,16 +14,19 @@ export default {
         const { user_id } = payload;
         if (user_id) {
           await env.TICKETS.delete(`build_lock:${user_id}`);
-          console.log(`Build callback: Released lock for user ${user_id}`);
-          return new Response('OK', { status: 200 });
+          console.log(`Lock released for ${user_id}`);
         }
-        return new Response('Bad Request: Missing user_id', { status: 400 });
+        return new Response('OK', { status: 200 });
       } catch (err) {
-        console.error('Error in build-callback:', err);
-        return new Response('Internal Server Error', { status: 500 });
+        return new Response('Error', { status: 500 });
       }
     }
 
+    if (request.method !== 'POST') {
+      return new Response('Not Found', { status: 404 });
+    }
+
+    // 2. Validação de Assinatura do Discord
     const signature = request.headers.get('x-signature-ed25519');
     const timestamp = request.headers.get('x-signature-timestamp');
     const body = await request.clone().text();
@@ -42,25 +38,24 @@ export default {
     
     const interaction = JSON.parse(body);
 
+    // 3. Resposta ao PING
     if (interaction.type === InteractionType.PING) {
       return Response.json({ type: InteractionResponseType.PONG });
     }
 
-    // 1. Slash Commands
+    // 4. Tratamento de Comandos (Slash Commands)
     if (interaction.type === InteractionType.APPLICATION_COMMAND) {
       const { name, options } = interaction.data;
+      const userId = interaction.member?.user?.id || interaction.user?.id;
 
-      // /preview-layout
+      // Comando /preview-layout
       if (name === 'preview-layout') {
         const attachmentOption = options && options.find(opt => opt.name === 'arquivo');
         const attachment = interaction.data.resolved.attachments[attachmentOption.value];
         const xmlUrl = attachment.url;
-        const userId = interaction.member?.user?.id || interaction.user?.id;
 
-        const githubUrl = `https://api.github.com/repos/${env.GITHUB_USER}/${env.GITHUB_REPO}/actions/workflows/preview.yml/dispatches`;
-
-        ctx.waitUntil(
-          fetch(githubUrl, {
+        ctx.waitUntil((async () => {
+          await fetch(`https://api.github.com/repos/${env.GITHUB_USER}/${env.GITHUB_REPO}/actions/workflows/preview.yml/dispatches`, {
             method: 'POST',
             headers: {
               'Authorization': `token ${env.GITHUB_TOKEN}`,
@@ -69,43 +64,34 @@ export default {
             },
             body: JSON.stringify({
               ref: 'main',
-              inputs: {
-                xml_url: xmlUrl,
-                channel_id: interaction.channel_id,
-                user_id: userId
-              }
+              inputs: { xml_url: xmlUrl, channel_id: interaction.channel_id, user_id: userId }
             })
-          })
-        );
+          });
+        })());
 
         return Response.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: `🖼️ **GERANDO PREVIEW...**\nEstou processando o seu arquivo XML. Em breve enviarei a imagem renderizada aqui!` }
+          data: { content: `🖼️ **PROCESSANDO XML...**\nEstou gerando o preview do seu layout. Aguarde alguns instantes!` }
         });
       }
 
-      // /compilar
+      // Comando /compilar
       if (name === 'compilar') {
         const urlOption = options && options.find(opt => opt.name === 'url');
         const zipUrl = urlOption.value;
-        const userId = interaction.member?.user?.id || interaction.user?.id;
         const lockKey = `build_lock:${userId}`;
 
         const existingLock = await env.TICKETS.get(lockKey);
         if (existingLock) {
           return Response.json({
             type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { content: '⚠️ **Compilação em andamento!** Por favor, aguarde.' }
+            data: { content: '⚠️ **ERRO:** Você já tem uma compilação em andamento. Aguarde!' }
           });
         }
 
-        await env.TICKETS.put(lockKey, 'active', { expirationTtl: 2400 });
-
-        const workerUrl = new URL(request.url).origin;
-        const githubUrl = `https://api.github.com/repos/${env.GITHUB_USER}/${env.GITHUB_REPO}/actions/workflows/engine.yml/dispatches`;
-
-        ctx.waitUntil(
-          fetch(githubUrl, {
+        ctx.waitUntil((async () => {
+          await env.TICKETS.put(lockKey, 'active', { expirationTtl: 2400 });
+          await fetch(`https://api.github.com/repos/${env.GITHUB_USER}/${env.GITHUB_REPO}/actions/workflows/engine.yml/dispatches`, {
             method: 'POST',
             headers: {
               'Authorization': `token ${env.GITHUB_TOKEN}`,
@@ -114,41 +100,36 @@ export default {
             },
             body: JSON.stringify({
               ref: 'main',
-              inputs: {
-                zip_url: zipUrl.trim(),
-                channel_id: interaction.channel_id,
-                user_id: userId,
-                worker_url: workerUrl
-              }
+              inputs: { zip_url: zipUrl.trim(), channel_id: interaction.channel_id, user_id: userId, worker_url: new URL(request.url).origin }
             })
-          })
-        );
+          });
+        })());
 
         return Response.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: `💻 **COMPILAÇÃO INICIADA!**\n🔗 **Source:** ${zipUrl}` }
+          data: { content: `💻 **BUILD INICIADO!**\nEnviarei o link do APK neste canal assim que terminar.` }
         });
       }
 
-      // /destravar
+      // Comando /destravar
       if (name === 'destravar') {
         const usuarioOption = options && options.find(opt => opt.name === 'usuario');
-        const targetUserId = usuarioOption ? usuarioOption.value : (interaction.member?.user?.id || interaction.user?.id);
+        const targetUserId = usuarioOption ? usuarioOption.value : userId;
         await env.TICKETS.delete(`build_lock:${targetUserId}`);
         return Response.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: `🔓 **TRAVA LIBERADA!** para <@${targetUserId}>.` }
+          data: { content: `🔓 **TRAVA REMOVIDA!** O usuário <@${targetUserId}> já pode compilar novamente.` }
         });
       }
 
-      // /setup-ticket
+      // Comando /setup-ticket
       if (name === 'setup-ticket') {
         return Response.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
           data: {
             embeds: [{
               title: '🎫 Suporte & Compilação',
-              description: 'Clique no botão abaixo para abrir um ticket.',
+              description: 'Clique no botão abaixo para abrir um canal de atendimento privado.',
               color: 5814783,
             }],
             components: [{
@@ -160,7 +141,7 @@ export default {
       }
     }
 
-    // 2. Buttons
+    // 5. Tratamento de Botões (Tickets)
     if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
       const { custom_id } = interaction.data;
       if (custom_id === 'abrir_ticket') {
@@ -173,7 +154,7 @@ export default {
               method: 'POST',
               headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                name: `【🔨】ᴄᴏᴍᴘɪʟᴀʀ-${Math.floor(Math.random() * 1000)}`,
+                name: `【🔨】ᴄᴏᴍᴘɪʟᴀʀ-${Math.floor(Math.random() * 9000) + 1000}`,
                 type: 0,
                 parent_id: '1510734520553308160',
                 permission_overwrites: [
@@ -187,7 +168,7 @@ export default {
               method: 'POST',
               headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                content: `Olá <@${userId}>! Use /compilar para começar.`
+                content: `👋 Olá <@${userId}>! Este é seu canal de compilação.\n\n- Use \`/compilar\` para gerar seu APK.\n- Use \`/preview-layout\` para ver um XML.`
               })
             });
           } catch (e) { console.error(e); }
@@ -195,10 +176,14 @@ export default {
 
         return Response.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { flags: 64, content: '✅ Ticket aberto!' }
+          data: { flags: 64, content: '✅ **TICKET CRIADO!** Verifique a lista de canais.' }
         });
       }
-    });
+    }
+
+    return new Response('Not Found', { status: 404 });
+  }
+});
 
           } catch (err) {
             console.error(err);

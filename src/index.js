@@ -121,7 +121,7 @@ export default {
           data: { content: `🔓 **TRAVA REMOVIDA!** O usuário <@${targetUserId}> já pode compilar novamente.` }
         });
       }
-//commit
+
       // Comando /setup-ticket
       if (name === 'setup-ticket') {
         return Response.json({
@@ -141,9 +141,11 @@ export default {
       }
     }
 
-    // 5. Tratamento de Botões (Tickets)
+    // 5. Tratamento de Botões (Message Components)
     if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
       const { custom_id } = interaction.data;
+
+      // Clique em "Abrir Ticket"
       if (custom_id === 'abrir_ticket') {
         const guildId = interaction.guild_id;
         const userId = interaction.member.user.id;
@@ -168,7 +170,18 @@ export default {
               method: 'POST',
               headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                content: `👋 Olá <@${userId}>! Este é seu canal de compilação.\n\n- Use \`/compilar\` para gerar seu APK.\n- Use \`/preview-layout\` para ver um XML.`
+                embeds: [{
+                  title: '🔨 Área de Compilação',
+                  description: `Olá <@${userId}>!\n\nPronto para compilar a sua Source Code?\nClique no botão abaixo para preencher o formulário.`,
+                  color: 3447003
+                }],
+                components: [{
+                  type: 1,
+                  components: [
+                    { type: 2, style: 1, label: 'Compilar APK', custom_id: 'compilar_apk', emoji: { name: '🔨' } },
+                    { type: 2, style: 4, label: 'Fechar Ticket', custom_id: 'fechar_ticket', emoji: { name: '🔒' } }
+                  ]
+                }]
               })
             });
           } catch (e) { console.error(e); }
@@ -179,12 +192,117 @@ export default {
           data: { flags: 64, content: '✅ **TICKET CRIADO!** Verifique a lista de canais.' }
         });
       }
+
+      // Clique em "Compilar APK" dentro do Ticket
+      if (custom_id === 'compilar_apk') {
+        const userId = interaction.member?.user?.id || interaction.user?.id;
+        return Response.json({
+          type: 9, // MODAL
+          data: {
+            title: 'Compilar Source Code',
+            custom_id: 'modal_compilar',
+            components: [
+              {
+                type: 1,
+                components: [{
+                  type: 4,
+                  custom_id: 'zip_url_input',
+                  label: 'Link direto do arquivo (.zip)',
+                  style: 1,
+                  placeholder: 'https://...',
+                  required: true
+                }]
+              },
+              {
+                type: 1,
+                components: [{
+                  type: 4,
+                  custom_id: 'zip_password_input',
+                  label: 'Senha do .zip (opcional)',
+                  style: 1,
+                  placeholder: 'Deixe em branco se não tiver',
+                  required: false
+                }]
+              }
+            ]
+          }
+        });
+      }
+
+      // Clique em "Fechar Ticket"
+      if (custom_id === 'fechar_ticket') {
+        ctx.waitUntil(
+          new Promise(resolve => setTimeout(resolve, 3000)).then(() =>
+            fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}`, {
+              method: 'DELETE',
+              headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` }
+            })
+          )
+        );
+        return Response.json({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: '🔒 Este ticket será fechado em instantes...' }
+        });
+      }
+    }
+
+    // 6. Tratamento de Modais
+    if (interaction.type === 5) {
+      const { custom_id, components } = interaction.data;
+      if (custom_id === 'modal_compilar') {
+        const zipUrl = components[0].components[0].value;
+        const zipPassword = components[1].components[0].value || '';
+        const userId = interaction.member?.user?.id || interaction.user?.id;
+        const lockKey = `build_lock:${userId}`;
+
+        ctx.waitUntil((async () => {
+          await env.TICKETS.put(lockKey, 'active', { expirationTtl: 2400 });
+          await fetch(`https://api.github.com/repos/${env.GITHUB_USER}/${env.GITHUB_REPO}/actions/workflows/engine.yml/dispatches`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `token ${env.GITHUB_TOKEN}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'User-Agent': 'Cloudflare-Worker'
+            },
+            body: JSON.stringify({
+              ref: 'main',
+              inputs: { zip_url: zipUrl.trim(), zip_password: zipPassword.trim(), channel_id: interaction.channel_id, user_id: userId, worker_url: new URL(request.url).origin }
+            })
+          });
+        })());
+
+        return Response.json({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: `💻 **COMPILAÇÃO INICIADA!**\n🔗 **Source:** <${zipUrl}>` }
+        });
+      }
     }
 
     return new Response('Not Found', { status: 404 });
   }
 };
-  
+
+          } catch (err) {
+            console.error(err);
+            // Atualiza a resposta inicial com o erro
+            await fetch(`https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                content: '❌ Falha ao criar o canal do ticket. Por favor, verifique se o bot possui a permissão de "Gerenciar Canais" (Manage Channels) no servidor.'
+              })
+            });
+          }
+        })());
+
+        // Responde de imediato ao Discord com uma mensagem pensando temporária (Deffered ephemeral)
+        return Response.json({
+          type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+          data: {
+            flags: 64 // Ephemeral (só visível para quem clicou)
+          }
+        });
+      }
 
       // Clique em "Compilar APK" dentro do Ticket
       if (custom_id === 'compilar_apk') {

@@ -117,10 +117,9 @@ export default {
       return Response.json({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: '💻 **Build Iniciado!**' } });
     }
 
-    return new Response('Not Found', { status: 404 });
+   return new Response('Not Found', { status: 404 });
   }
-});
-
+};
           } catch (err) {
             console.error(err);
             // Atualiza a resposta inicial com o erro

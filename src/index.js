@@ -184,14 +184,7 @@ export default {
     return new Response('Not Found', { status: 404 });
   }
 };
-        // Responde de imediato ao Discord com uma mensagem pensando temporária (Deffered ephemeral)
-        return Response.json({
-          type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            flags: 64 // Ephemeral (só visível para quem clicou)
-          }
-        });
-      }
+  
 
       // Clique em "Compilar APK" dentro do Ticket
       if (custom_id === 'compilar_apk') {

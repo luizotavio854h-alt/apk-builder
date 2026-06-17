@@ -121,7 +121,7 @@ export default {
           data: { content: `🔓 **TRAVA REMOVIDA!** O usuário <@${targetUserId}> já pode compilar novamente.` }
         });
       }
-
+//commit
       // Comando /setup-ticket
       if (name === 'setup-ticket') {
         return Response.json({

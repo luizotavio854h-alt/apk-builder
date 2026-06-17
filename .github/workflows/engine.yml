@@ -1,0 +1,413 @@
+name: Build Android Launcher
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_url:
+        description: 'Link direto ou MediaFire da Source Code (.zip)'
+        required: true
+        type: string
+      zip_password:
+        description: 'Senha do arquivo ZIP (se houver)'
+        required: false
+        type: string
+      channel_id:
+        description: 'ID do canal privado (ticket) para entregar o APK'
+        required: true
+        type: string
+      user_id:
+        description: 'ID do usuário que solicitou a compilação'
+        required: false
+        type: string
+      worker_url:
+        description: 'URL do Worker para callback de finalização'
+        required: false
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 0. Inicializar Status no Discord
+      - name: Inicializar Status no Discord
+        run: |
+          CHECKLIST="⏳ **Status Atual:** Inicializando a esteira e preparando o build...\n\n**Progresso da Compilação:**\n🔄 Baixar e extrair Source Code 📂\n⚪ Configurar SDK & Dependências ⚙️\n⚪ Compilar APK (Debug) 🛠️\n⚪ Fazer Upload do APK final 📦"
+          RESPONSE=$(curl -s -H "Content-Type: application/json" \
+               -H "Authorization: Bot ${{ secrets.DISCORD_BOT_TOKEN }}" \
+               -d "{\"content\": \"$CHECKLIST\"}" \
+               https://discord.com/api/v10/channels/${{ github.event.inputs.channel_id }}/messages)
+          MESSAGE_ID=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.loads(sys.stdin.read()).get('id', ''))" 2>/dev/null || echo "")
+          echo "STATUS_MESSAGE_ID=$MESSAGE_ID" >> $GITHUB_ENV
+          echo "Status message ID: $MESSAGE_ID"
+
+      # 1. O Script Inteligente de Download e Extração
+      - name: Baixar e Extrair Source Code
+        run: |
+          echo "=============================================="
+          echo "INICIANDO DETECÇÃO E DOWNLOAD DA SOURCE CODE"
+          echo "=============================================="
+          
+          INPUT_URL="${{ github.event.inputs.zip_url }}"
+          ZIP_PASSWORD="${{ github.event.inputs.zip_password }}"
+          USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          
+          # Tratamento avançado para MediaFire
+          if [[ "$INPUT_URL" == *"mediafire.com"* ]]; then
+            echo "[MediaFire] Detectado. Extraindo link de download direto..."
+            HTML_CONTENT=$(curl -sL -A "$USER_AGENT" "$INPUT_URL")
+            REAL_URL=$(echo "$HTML_CONTENT" | grep -oE 'https://download[^"]+\.zip' | head -n 1)
+            if [ -z "$REAL_URL" ]; then
+              REAL_URL=$(echo "$HTML_CONTENT" | grep -oE 'href="https://[^"]+static\.mediafire\.com[^"]+"' | head -n 1 | cut -d'"' -f2)
+            fi
+            if [ -z "$REAL_URL" ]; then
+              REAL_URL=$(echo "$HTML_CONTENT" | grep -i 'aria-label="Download file"' | grep -oE 'href="[^"]+"' | cut -d'"' -f2)
+            fi
+          else
+            echo "[Direto] Utilizando a URL fornecida."
+            REAL_URL="$INPUT_URL"
+          fi
+          
+          if [ -z "$REAL_URL" ]; then
+            echo "::error::[ERRO CRÍTICO] Não foi possível extrair o link de download real. Verifique se o link do MediaFire ainda está ativo."
+            exit 1
+          fi
+          
+          echo "Baixando o arquivo de: $REAL_URL"
+          if ! curl -f -L -A "$USER_AGENT" -o source.zip "$REAL_URL"; then
+            echo "::error::[ERRO CRÍTICO] O servidor recusou a conexão ou o arquivo não existe."
+            exit 1
+          fi
+          
+          echo "Validando integridade do arquivo ZIP..."
+          if [ -n "$ZIP_PASSWORD" ]; then
+            echo "🔒 Senha detectada. Testando extração segura..."
+            if ! unzip -P "$ZIP_PASSWORD" -t source.zip > /dev/null 2>&1; then
+              echo "::error::[ERRO] A senha está incorreta ou o arquivo está corrompido!"
+              exit 1
+            fi
+            echo "Arquivo validado. Extraindo para diretório temporário..."
+            mkdir -p temp_extract
+            unzip -P "$ZIP_PASSWORD" -q source.zip -d temp_extract
+          else
+            if ! unzip -t source.zip > /dev/null 2>&1; then
+              echo "::error::[ERRO DE ARQUIVO] O arquivo baixado não é um ZIP válido ou está corrompido!"
+              head -n 10 source.zip || true
+              exit 1
+            fi
+            echo "Arquivo validado. Extraindo para diretório temporário..."
+            mkdir -p temp_extract
+            unzip -q source.zip -d temp_extract
+          fi
+          
+          echo "Buscando a raiz do projeto (onde está o Gradle)..."
+          CANDIDATES=$(find temp_extract -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" -o -name "gradlew" -o -name "build.gradle" -o -name "build.gradle.kts" \))
+          
+          PROJECT_ROOT=""
+          BEST_DEPTH=9999
+          BEST_TYPE=4
+          
+          while read -r file; do
+            [ -z "$file" ] && continue
+            dir=$(dirname "$file")
+            # Conta o número de barras para medir a profundidade do caminho
+            temp_dir="${dir//[^\/]/}"
+            depth="${#temp_dir}"
+            
+            filename=$(basename "$file")
+            type_weight=3
+            if [[ "$filename" == "settings.gradle"* ]]; then
+              type_weight=1
+            elif [[ "$filename" == "gradlew" ]]; then
+              type_weight=2
+            fi
+            
+            if [ "$depth" -lt "$BEST_DEPTH" ]; then
+              BEST_DEPTH=$depth
+              BEST_TYPE=$type_weight
+              PROJECT_ROOT=$dir
+            elif [ "$depth" -eq "$BEST_DEPTH" ]; then
+              if [ "$type_weight" -lt "$BEST_TYPE" ]; then
+                BEST_TYPE=$type_weight
+                PROJECT_ROOT=$dir
+              fi
+            fi
+          done <<< "$CANDIDATES"
+          
+          if [ -z "$PROJECT_ROOT" ]; then
+            echo "::error::[ERRO ESTRUTURAL] Nenhum projeto Gradle (gradlew ou build.gradle) foi encontrado no ZIP!"
+            echo "----------------------------------------------"
+            echo "Estrutura dos arquivos baixados para debug:"
+            find temp_extract -type f | head -n 20 
+            echo "----------------------------------------------"
+            exit 1
+          fi
+          
+          echo "Raiz do projeto encontrada com sucesso em: $PROJECT_ROOT"
+          
+          shopt -s dotglob
+          mv "$PROJECT_ROOT"/* . 2>/dev/null || true
+          shopt -u dotglob
+          
+          chmod +x ./gradlew 2>/dev/null || true
+          
+          rm -rf temp_extract source.zip
+          echo "=============================================="
+          echo "SOURCE CODE CONFIGURADA E PRONTA PARA COMPILAR"
+          echo "=============================================="
+
+          if [ -n "$STATUS_MESSAGE_ID" ]; then
+            CHECKLIST="⚙️ **Status Atual:** Configurando o ambiente de desenvolvimento (Java, Android SDK e Caches)...\n\n**Progresso da Compilação:**\n✅ Baixar e extrair Source Code 📂\n🔄 Configurar SDK & Dependências ⚙️\n⚪ Compilar APK (Debug) 🛠️\n⚪ Fazer Upload do APK final 📦"
+            curl -s -X PATCH -H "Content-Type: application/json" \
+                 -H "Authorization: Bot ${{ secrets.DISCORD_BOT_TOKEN }}" \
+                 -d "{\"content\": \"$CHECKLIST\"}" \
+                 https://discord.com/api/v10/channels/${{ github.event.inputs.channel_id }}/messages/$STATUS_MESSAGE_ID || true
+          fi
+
+      # 2. Configurar o Java
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # 3. Configurar Android SDK
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 4. Ativar o Cache Oficial do Gradle (Java/Dependências)
+      - name: Setup Gradle Cache
+        uses: gradle/actions/setup-gradle@v3
+
+      # 5. Cache Exclusivo para o Código C/C++ Nativo (NDK)
+      - name: Cache C/C++ Build (NDK)
+        uses: actions/cache@v4
+        with:
+          path: '**/.cxx'
+          key: ndk-cache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            ndk-cache-${{ runner.os }}-
+
+      # 5.5. Atualizar Status - Iniciando Compilação
+      - name: Atualizar Status - Iniciando Compilação
+        run: |
+          if [ -n "$STATUS_MESSAGE_ID" ]; then
+            CHECKLIST="🛠️ **Status Atual:** Compilando o APK (Esta etapa costuma levar de 5 a 15 minutos, aguarde)...\n\n**Progresso da Compilação:**\n✅ Baixar e extrair Source Code 📂\n✅ Configurar SDK & Dependências ⚙️\n🔄 Compilar APK (Debug) 🛠️\n⚪ Fazer Upload do APK final 📦"
+            curl -s -X PATCH -H "Content-Type: application/json" \
+                 -H "Authorization: Bot ${{ secrets.DISCORD_BOT_TOKEN }}" \
+                 -d "{\"content\": \"$CHECKLIST\"}" \
+                 https://discord.com/api/v10/channels/${{ github.event.inputs.channel_id }}/messages/$STATUS_MESSAGE_ID || true
+          fi
+
+      # 6. Compilar o Projeto com controle de memória (Prevenção de OOM)
+      - name: Compilar APK (Debug)
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        run: |
+          PROJECT_DIR=$(pwd)
+          
+          if [ ! -f "./gradlew" ]; then
+            echo "⚠️ gradlew não encontrado. Gerando wrapper em diretório isolado..."
+            
+            # Detecta a versão do Gradle nos arquivos do projeto (se existir)
+            GRADLE_VERSION="8.7"
+            if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+              DETECTED=$(grep "distributionUrl" gradle/wrapper/gradle-wrapper.properties | grep -oE "gradle-[0-9]+\.[0-9]+(\.[0-9]+)?-" | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?" | head -n 1)
+              [ -n "$DETECTED" ] && GRADLE_VERSION="$DETECTED"
+            fi
+            echo "Usando Gradle $GRADLE_VERSION para gerar o wrapper..."
+            
+            # Gera o wrapper num diretório limpo (sem build.gradle do projeto)
+            TMPDIR=$(mktemp -d)
+            cd "$TMPDIR"
+            touch settings.gradle  # Necessário para Gradle 9.x reconhecer como projeto válido
+            gradle wrapper --gradle-version "$GRADLE_VERSION"
+            
+            # Copia o wrapper para o projeto
+            cp gradlew "$PROJECT_DIR/gradlew"
+            cp -r gradle "$PROJECT_DIR/"
+            cd "$PROJECT_DIR"
+            chmod +x ./gradlew
+          else
+            chmod +x ./gradlew
+          fi
+          
+          ./gradlew assembleDebug 2>&1 | tee build.log
+
+      # 6.5. Extrair Erros em caso de Falha
+      - name: Extrair Erros em caso de Falha
+        if: failure()
+        run: |
+          python3 scripts/parse_errors.py
+          echo "ERROR_DETAILS<<EOF" >> $GITHUB_ENV
+          cat error_details.txt >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      # 6. Mapeamento de Log para Debug
+      - name: Localizar APK Gerado
+        run: |
+          echo "Buscando o APK recém-compilado na estrutura de pastas..."
+          find . -name "*.apk"
+
+      # 7. Busca Inteligente e Upload Seguro do APK Gerado
+      - name: Upload do APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Launcher-APK
+          path: '**/*.apk'
+          if-no-files-found: error # Força a action a falhar se não achar o APK, evitando o "falso positivo"
+
+      # 7.5. Atualizar Status - Iniciando Upload
+      - name: Atualizar Status - Iniciando Upload
+        if: success()
+        run: |
+          if [ -n "$STATUS_MESSAGE_ID" ]; then
+            CHECKLIST="📦 **Status Atual:** Compilação finalizada! Fazendo o upload do APK gerado...\n\n**Progresso da Compilação:**\n✅ Baixar e extrair Source Code 📂\n✅ Configurar SDK & Dependências ⚙️\n✅ Compilar APK (Debug) 🛠️\n🔄 Fazer Upload do APK final 📦"
+            curl -s -X PATCH -H "Content-Type: application/json" \
+                 -H "Authorization: Bot ${{ secrets.DISCORD_BOT_TOKEN }}" \
+                 -d "{\"content\": \"$CHECKLIST\"}" \
+                 https://discord.com/api/v10/channels/${{ github.event.inputs.channel_id }}/messages/$STATUS_MESSAGE_ID || true
+          fi
+
+      # 8. Fazer Upload para Link de Download Direto
+      - name: Upload Direto do APK
+        id: upload_direto
+        if: success()
+        run: |
+          APK_FILE=$(find . -name "*.apk" | head -n 1)
+          if [ -n "$APK_FILE" ]; then
+            DOWNLOAD_LINK=""
+
+            # Tentativa 1: transfer.sh (confiável, sem chave de API)
+            echo "Fazendo upload de $APK_FILE para transfer.sh..."
+            DOWNLOAD_LINK=$(curl -s --upload-file "$APK_FILE" "https://transfer.sh/$(basename $APK_FILE)" || echo "")
+            echo "Resposta transfer.sh: $DOWNLOAD_LINK"
+
+            # Tentativa 2: catbox.moe (fallback estável)
+            if [ -z "$DOWNLOAD_LINK" ] || [[ "$DOWNLOAD_LINK" != http* ]]; then
+              echo "transfer.sh falhou, tentando catbox.moe..."
+              DOWNLOAD_LINK=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@$APK_FILE" "https://catbox.moe/user/api.php" || echo "")
+              echo "Resposta catbox.moe: $DOWNLOAD_LINK"
+            fi
+
+            # Tentativa 3: gofile.io (nova API)
+            if [ -z "$DOWNLOAD_LINK" ] || [[ "$DOWNLOAD_LINK" != http* ]]; then
+              echo "catbox.moe falhou, tentando gofile.io..."
+              # Obtem um servidor válido e tenta o upload
+              SERVER=$(curl -s "https://api.gofile.io/servers" | python3 -c "import sys,json; d=sys.stdin.read(); print(json.loads(d).get('data',{}).get('servers',[{'name':'store1'}])[0]['name']) if d else print('store1')" 2>/dev/null || echo "store1")
+              RESPONSE=$(curl -s -F "file=@$APK_FILE" "https://${SERVER}.gofile.io/contents/uploadfile" || echo "")
+              DOWNLOAD_LINK=$(echo "$RESPONSE" | python3 -c "import sys,json; d=sys.stdin.read(); print(json.loads(d).get('data',{}).get('downloadPage','')) if d else print('')" 2>/dev/null || echo "")
+              echo "Resposta gofile.io: $DOWNLOAD_LINK"
+            fi
+
+            # Tentativa 4: bashupload.com
+            if [ -z "$DOWNLOAD_LINK" ] || [[ "$DOWNLOAD_LINK" != http* ]]; then
+              echo "gofile.io falhou, tentando bashupload.com..."
+              DOWNLOAD_LINK=$(curl -s --upload-file "$APK_FILE" "https://bashupload.com/$(basename $APK_FILE)" || echo "")
+              echo "Resposta bashupload.com: $DOWNLOAD_LINK"
+            fi
+
+            if [ -z "$DOWNLOAD_LINK" ] || [[ "$DOWNLOAD_LINK" != http* ]]; then
+              echo "::warning::Todos os serviços de upload falharam."
+              echo "DOWNLOAD_URL=UPLOAD_FALHOU" >> $GITHUB_ENV
+            else
+              echo "✅ Upload concluído: $DOWNLOAD_LINK"
+              echo "DOWNLOAD_URL=$DOWNLOAD_LINK" >> $GITHUB_ENV
+            fi
+          else
+            echo "Nenhum APK encontrado para upload direto."
+            echo "DOWNLOAD_URL=NENHUM_APK_GERADO" >> $GITHUB_ENV
+          fi
+
+      # 9. Notificar no Discord via Ticket Privado (Bot API)
+      - name: Notificar Discord no Ticket
+        if: always()
+        env:
+          DOWNLOAD_URL: ${{ env.DOWNLOAD_URL }}
+          STATUS_MESSAGE_ID: ${{ env.STATUS_MESSAGE_ID }}
+          ERROR_DETAILS: ${{ env.ERROR_DETAILS }}
+        run: |
+          python3 -c '
+          import json, os
+          status = "${{ job.status }}"
+          download_url = os.environ.get("DOWNLOAD_URL", "")
+          error_details = os.environ.get("ERROR_DETAILS", "").replace("\\n", "\n")
+          repo = "${{ github.repository }}"
+          run_id = "${{ github.run_id }}"
+          
+          embed = {}
+          if status == "success":
+              description = (
+                  "**Progresso da Compilação:**\n"
+                  "✅ Baixar e extrair Source Code 📂\n"
+                  "✅ Configurar SDK & Dependências ⚙️\n"
+                  "✅ Compilar APK (Debug) 🛠️\n"
+                  "✅ Fazer Upload do APK final 📦\n\n"
+                  f"🔗 **Link de Download Direto (Celular):**\n"
+                  f"[Clique aqui para baixar o APK]({download_url})\n\n"
+                  "*(Este link permite baixar o APK diretamente no celular)*"
+              )
+              embed = {
+                  "title": "✅ COMPILAÇÃO CONCLUÍDA!",
+                  "description": description,
+                  "color": 3066993,
+                  "image": {
+                      "url": f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={download_url}"
+                  },
+                  "footer": {
+                      "text": "📱 Escaneie o QR Code acima se estiver no PC para baixar no celular!"
+                  }
+              }
+          else:
+              desc = (
+                  "**Progresso da Compilação:**\n"
+                  "✅ Baixar e extrair Source Code 📂\n"
+                  "✅ Configurar SDK & Dependências ⚙️\n"
+                  "❌ Compilar APK (Debug) - **FALHOU** 🛠️\n"
+                  "🚫 Fazer Upload do APK final - **Cancelado** 📦\n\n"
+                  f"O GitHub Actions encontrou um erro no código. Verifique os logs em: "
+                  f"[GitHub Actions Run](https://github.com/{repo}/actions/runs/{run_id})"
+              )
+              if error_details:
+                  desc += f"\n{error_details}"
+              
+              embed = {
+                  "title": "❌ FALHA NA COMPILAÇÃO!",
+                  "description": desc,
+                  "color": 15158332
+              }
+          
+          payload = {"content": "", "embeds": [embed]}
+          with open("payload.json", "w", encoding="utf-8") as f:
+              json.dump(payload, f, ensure_ascii=False, indent=2)
+          '
+          
+          if [ -n "$STATUS_MESSAGE_ID" ]; then
+            curl -s -X PATCH -H "Content-Type: application/json" \
+                 -H "Authorization: Bot ${{ secrets.DISCORD_BOT_TOKEN }}" \
+                 -d @payload.json \
+                 https://discord.com/api/v10/channels/${{ github.event.inputs.channel_id }}/messages/$STATUS_MESSAGE_ID
+          else
+            curl -s -H "Content-Type: application/json" \
+                 -H "Authorization: Bot ${{ secrets.DISCORD_BOT_TOKEN }}" \
+                 -d @payload.json \
+                 https://discord.com/api/v10/channels/${{ github.event.inputs.channel_id }}/messages
+          fi
+
+      # 10. Liberar trava de estado no Worker
+      - name: Liberar Trava no Worker
+        if: always()
+        run: |
+          USER_ID="${{ github.event.inputs.user_id }}"
+          WORKER_URL="${{ github.event.inputs.worker_url }}"
+          if [ -n "$USER_ID" ] && [ -n "$WORKER_URL" ]; then
+            echo "Notificando Worker para liberar a trava do usuário $USER_ID..."
+            curl -s -X POST \
+                 -H "Content-Type: application/json" \
+                 -H "Authorization: Bearer ${{ secrets.DISCORD_BOT_TOKEN }}" \
+                 -d "{\"user_id\": \"$USER_ID\"}" \
+                 "$WORKER_URL/build-callback"
+          else
+            echo "User ID ou Worker URL ausente. Pulando liberação da trava."
+          fi

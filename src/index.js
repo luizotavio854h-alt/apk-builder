@@ -183,7 +183,7 @@ export default {
 
     return new Response('Not Found', { status: 404 });
   }
-});
+};
 
           } catch (err) {
             console.error(err);

@@ -53,7 +53,55 @@ export default {
     if (interaction.type === InteractionType.APPLICATION_COMMAND) {
       const { name, options } = interaction.data;
 
-      // Comando /compilar legado (caso alguém ainda use)
+      // Comando /preview-layout (Renderiza XML Android)
+      if (name === 'preview-layout') {
+        const attachmentOption = options && options.find(opt => opt.name === 'arquivo');
+        if (!attachmentOption) {
+          return Response.json({
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: { content: '❌ Por favor, anexe um arquivo .xml para o preview.' }
+          });
+        }
+
+        const attachment = interaction.data.resolved.attachments[attachmentOption.value];
+        const xmlUrl = attachment.url;
+        const userId = interaction.member?.user?.id || interaction.user?.id;
+
+        const githubUrl = `https://api.github.com/repos/${env.GITHUB_USER}/${env.GITHUB_REPO}/actions/workflows/preview.yml/dispatches`;
+
+        ctx.waitUntil(
+          fetch(githubUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': `token ${env.GITHUB_TOKEN}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'User-Agent': 'Cloudflare-Worker'
+            },
+            body: JSON.stringify({
+              ref: 'main',
+              inputs: {
+                xml_url: xmlUrl,
+                channel_id: interaction.channel_id,
+                user_id: userId
+              }
+            })
+          }).then(async (res) => {
+            if (!res.ok) {
+              const errText = await res.text();
+              console.error(`Erro ao disparar Preview Action: ${errText}`);
+            }
+          })
+        );
+
+        return Response.json({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: {
+            content: `🖼️ **GERANDO PREVIEW...**\nEstou processando o seu arquivo XML. Em breve enviarei a imagem renderizada aqui mesmo!`
+          }
+        });
+      }
+
+      // Comando /compilar
       if (name === 'compilar') {
         const urlOption = options && options.find(opt => opt.name === 'url');
         const zipUrl = urlOption ? urlOption.value : null;
@@ -117,11 +165,10 @@ export default {
         });
       }
 
-      // Novo comando /destravar (Libera a trava de um usuário ou dele mesmo)
+      // Comando /destravar
       if (name === 'destravar') {
         const usuarioOption = options && options.find(opt => opt.name === 'usuario');
         const targetUserId = usuarioOption ? usuarioOption.value : null;
-
         const callerId = interaction.member?.user?.id || interaction.user?.id;
         
         if (targetUserId && targetUserId !== callerId) {
@@ -164,7 +211,7 @@ export default {
         });
       }
 
-      // Novo comando /setup-ticket (Cria o painel de tickets)
+      // Comando /setup-ticket
       if (name === 'setup-ticket') {
         return Response.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -173,21 +220,19 @@ export default {
               {
                 title: '🎫 Suporte & Compilação de APK',
                 description: 'Precisa de ajuda ou quer compilar sua Source Code do SA-MP Mobile?\n\nClique no botão abaixo para abrir um canal de atendimento privado.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n🔒 Só você e a nossa equipe terão acesso ao canal\n⚡ Resposta rápida garantida\n🔨 Compilações de APK feitas automaticamente\n━━━━━━━━━━━━━━━━━━━━━━━━━━',
-                color: 5814783, // Blurple/Azul bonito
+                color: 5814783,
               }
             ],
             components: [
               {
-                type: 1, // Action Row
+                type: 1,
                 components: [
                   {
-                    type: 2, // Button
-                    style: 1, // Primary (Blurple)
+                    type: 2,
+                    style: 1,
                     label: 'Abrir Ticket',
                     custom_id: 'abrir_ticket',
-                    emoji: {
-                      name: '🎫'
-                    }
+                    emoji: { name: '🎫' }
                   }
                 ]
               }
@@ -205,33 +250,23 @@ export default {
       if (custom_id === 'abrir_ticket') {
         const guildId = interaction.guild_id;
         const userId = interaction.member.user.id;
-        const username = interaction.member.user.username;
 
         if (!env.DISCORD_BOT_TOKEN) {
           return Response.json({
             type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: {
-              flags: 64, // Ephemeral
-              content: '❌ Erro interno: O segredo DISCORD_BOT_TOKEN não foi configurado.'
-            }
+            data: { flags: 64, content: '❌ Erro interno: O segredo DISCORD_BOT_TOKEN não foi configurado.' }
           });
         }
 
-        // Executamos a criação do canal em background para responder ao Discord antes do timeout de 3 segundos
         ctx.waitUntil((async () => {
           try {
-            // Conta quantos canais ativos existem na categoria para definir o número do ticket
             const channelsRes = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
-              headers: {
-                'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`
-              }
+              headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` }
             });
             let ticketNumber = 1;
             if (channelsRes.ok) {
               const channels = await channelsRes.json();
               const activeTickets = channels.filter(c => c.parent_id === '1510734520553308160');
-              
-              // Verifica se o usuário já tem um ticket aberto na categoria
               const userAlreadyHasTicket = activeTickets.some(channel => 
                 channel.permission_overwrites && 
                 channel.permission_overwrites.some(overwrite => overwrite.id === userId)
@@ -241,106 +276,66 @@ export default {
                 await fetch(`https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, {
                   method: 'PATCH',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    content: '❌ **Você já possui um ticket de compilação aberto!** Por favor, feche-o antes de tentar abrir um novo.'
-                  })
+                  body: JSON.stringify({ content: '❌ **Você já possui um ticket de compilação aberto!** Por favor, feche-o antes de tentar abrir um novo.' })
                 });
-                return; // Interrompe a criação de um novo ticket
+                return;
               }
 
               const counterVal = await env.TICKETS.get('ticket_counter');
-              if (counterVal) {
-                ticketNumber = parseInt(counterVal) + 1;
-              }
-              while (activeTickets.some(c => c.name.includes(`compilar-${ticketNumber}`) || c.name.includes(`ᴄᴏᴍᴘɪʟᴀʀ-${ticketNumber}`))) {
-                ticketNumber++;
-              }
+              if (counterVal) ticketNumber = parseInt(counterVal) + 1;
+              while (activeTickets.some(c => c.name.includes(`compilar-${ticketNumber}`))) ticketNumber++;
               await env.TICKETS.put('ticket_counter', ticketNumber.toString());
             }
 
-            // Criação do Canal Privado via Discord REST API
             const createChannelRes = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
               method: 'POST',
-              headers: {
-                'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`,
-                'Content-Type': 'application/json'
-              },
+              headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 name: `【🔨】ᴄᴏᴍᴘɪʟᴀʀ-${ticketNumber}`,
-                type: 0, // Guild Text Channel
-                parent_id: '1510734520553308160', // Categoria correta
+                type: 0,
+                parent_id: '1510734520553308160',
                 permission_overwrites: [
-                  {
-                    id: guildId, // @everyone role
-                    type: 0,
-                    deny: '1024' // Deny VIEW_CHANNEL
-                  },
-                  {
-                    id: userId, // O usuário que abriu
-                    type: 1,
-                    allow: '3072' // Allow VIEW_CHANNEL & SEND_MESSAGES
-                  }
+                  { id: guildId, type: 0, deny: '1024' },
+                  { id: userId, type: 1, allow: '3072' }
                 ]
               })
             });
 
-            if (!createChannelRes.ok) {
-              throw new Error(`Discord API error: ${createChannelRes.statusText}`);
-            }
-
+            if (!createChannelRes.ok) throw new Error(`Discord API error: ${createChannelRes.statusText}`);
             const newChannel = await createChannelRes.json();
 
-            // Envia a mensagem com o botão "Compilar APK" dentro do novo canal de ticket
             await fetch(`https://discord.com/api/v10/channels/${newChannel.id}/messages`, {
               method: 'POST',
-              headers: {
-                'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`,
-                'Content-Type': 'application/json'
-              },
+              headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                embeds: [
-                  {
-                    title: '🔨 Área de Compilação',
-                    description: `Olá <@${userId}>!\n\nPronto para compilar a sua Source Code do SA-MP Mobile?\nClique no botão abaixo para preencher o formulário.`,
-                    color: 3447003 // Azul escuro
-                  }
-                ],
-                components: [
-                  {
-                    type: 1,
-                    components: [
-                      {
-                        type: 2,
-                        style: 1,
-                        label: 'Compilar APK',
-                        custom_id: 'compilar_apk',
-                        emoji: {
-                          name: '🔨'
-                        }
-                      },
-                      {
-                        type: 2,
-                        style: 4, // Botão vermelho (Danger)
-                        label: 'Fechar Ticket',
-                        custom_id: 'fechar_ticket',
-                        emoji: {
-                          name: '🔒'
-                        }
-                      }
-                    ]
-                  }
-                ]
+                embeds: [{
+                  title: '🔨 Área de Compilação',
+                  description: `Olá <@${userId}>!\n\nPronto para compilar a sua Source Code do SA-MP Mobile?\nClique no botão abaixo para preencher o formulário.`,
+                  color: 3447003
+                }],
+                components: [{
+                  type: 1,
+                  components: [
+                    { type: 2, style: 1, label: 'Compilar APK', custom_id: 'compilar_apk', emoji: { name: '🔨' } },
+                    { type: 2, style: 4, label: 'Fechar Ticket', custom_id: 'fechar_ticket', emoji: { name: '🔒' } }
+                  ]
+                }]
               })
             });
 
-            // Envia a mensagem de confirmação final (webhook callback original)
             await fetch(`https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                content: `✅ Seu ticket de compilação foi aberto com sucesso em <#${newChannel.id}>!`
-              })
+              body: JSON.stringify({ content: `✅ Seu ticket de compilação foi aberto com sucesso em <#${newChannel.id}>!` })
             });
+          } catch (err) {
+            console.error(err);
+          }
+        })());
+
+        return Response.json({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+      }
+    });
 
           } catch (err) {
             console.error(err);

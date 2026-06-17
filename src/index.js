@@ -120,17 +120,7 @@ export default {
    return new Response('Not Found', { status: 404 });
   }
 };
-          } catch (err) {
-            console.error(err);
-            // Atualiza a resposta inicial com o erro
-            await fetch(`https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                content: '❌ Falha ao criar o canal do ticket. Por favor, verifique se o bot possui a permissão de "Gerenciar Canais" (Manage Channels) no servidor.'
-              })
-            });
-          }
+    
         })());
 
         // Responde de imediato ao Discord com uma mensagem pensando temporária (Deffered ephemeral)

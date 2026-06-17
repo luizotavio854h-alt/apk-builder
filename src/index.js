@@ -127,7 +127,6 @@ export default {
             flags: 64 // Ephemeral (só visível para quem clicou)
           }
         });
-      }
 
       // Clique em "Compilar APK" dentro do Ticket
       if (custom_id === 'compilar_apk') {

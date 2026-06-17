@@ -2,286 +2,126 @@ import { InteractionType, InteractionResponseType, verifyKey } from 'discord-int
 
 export default {
   async fetch(request, env, ctx) {
-    // 1. Endpoint de Callback (GitHub -> Worker)
     const url = new URL(request.url);
+
+    // 1. Callback do GitHub
     if (url.pathname === '/build-callback') {
       const authHeader = request.headers.get('Authorization');
-      if (!authHeader || authHeader !== `Bearer ${env.DISCORD_BOT_TOKEN}`) {
-        return new Response('Unauthorized', { status: 401 });
-      }
-      try {
-        const payload = await request.json();
-        const { user_id } = payload;
-        if (user_id) {
-          await env.TICKETS.delete(`build_lock:${user_id}`);
-          console.log(`Lock released for ${user_id}`);
+      if (authHeader === `Bearer ${env.DISCORD_BOT_TOKEN}`) {
+        try {
+          const { user_id } = await request.json();
+          if (user_id) await env.TICKETS.delete(`build_lock:${user_id}`);
+          return new Response('OK', { status: 200 });
+        } catch (e) {
+          return new Response('Error', { status: 500 });
         }
-        return new Response('OK', { status: 200 });
-      } catch (err) {
-        return new Response('Error', { status: 500 });
       }
+      return new Response('Unauthorized', { status: 401 });
     }
 
-    if (request.method !== 'POST') {
-      return new Response('Not Found', { status: 404 });
-    }
+    if (request.method !== 'POST') return new Response('Not Found', { status: 404 });
 
-    // 2. Validação de Assinatura do Discord
+    // 2. Validação Discord
     const signature = request.headers.get('x-signature-ed25519');
     const timestamp = request.headers.get('x-signature-timestamp');
     const body = await request.clone().text();
-    
-    const isValidRequest = await verifyKey(body, signature, timestamp, env.DISCORD_PUBLIC_KEY);
-    if (!isValidRequest) {
-      return new Response('Bad request signature.', { status: 401 });
-    }
-    
+    const isValid = await verifyKey(body, signature, timestamp, env.DISCORD_PUBLIC_KEY);
+    if (!isValid) return new Response('Invalid Signature', { status: 401 });
+
     const interaction = JSON.parse(body);
+    if (interaction.type === InteractionType.PING) return Response.json({ type: InteractionResponseType.PONG });
 
-    // 3. Resposta ao PING
-    if (interaction.type === InteractionType.PING) {
-      return Response.json({ type: InteractionResponseType.PONG });
-    }
+    const userId = interaction.member?.user?.id || interaction.user?.id;
 
-    // 4. Tratamento de Comandos (Slash Commands)
+    // 3. Comandos Slash
     if (interaction.type === InteractionType.APPLICATION_COMMAND) {
       const { name, options } = interaction.data;
-      const userId = interaction.member?.user?.id || interaction.user?.id;
 
-      // Comando /preview-layout
       if (name === 'preview-layout') {
-        const attachmentOption = options && options.find(opt => opt.name === 'arquivo');
-        const attachment = interaction.data.resolved.attachments[attachmentOption.value];
-        const xmlUrl = attachment.url;
-
-        ctx.waitUntil((async () => {
-          await fetch(`https://api.github.com/repos/${env.GITHUB_USER}/${env.GITHUB_REPO}/actions/workflows/preview.yml/dispatches`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `token ${env.GITHUB_TOKEN}`,
-              'Accept': 'application/vnd.github.v3+json',
-              'User-Agent': 'Cloudflare-Worker'
-            },
-            body: JSON.stringify({
-              ref: 'main',
-              inputs: { xml_url: xmlUrl, channel_id: interaction.channel_id, user_id: userId }
-            })
-          });
-        })());
-
-        return Response.json({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: `🖼️ **PROCESSANDO XML...**\nEstou gerando o preview do seu layout. Aguarde alguns instantes!` }
-        });
+        const fileId = options.find(o => o.name === 'arquivo').value;
+        const xmlUrl = interaction.data.resolved.attachments[fileId].url;
+        ctx.waitUntil(fetch(`https://api.github.com/repos/${env.GITHUB_USER}/${env.GITHUB_REPO}/actions/workflows/preview.yml/dispatches`, {
+          method: 'POST',
+          headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'CF' },
+          body: JSON.stringify({ ref: 'main', inputs: { xml_url: xmlUrl, channel_id: interaction.channel_id, user_id: userId } })
+        }));
+        return Response.json({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: '🖼️ **Processando XML...**' } });
       }
 
-      // Comando /compilar
       if (name === 'compilar') {
-        const urlOption = options && options.find(opt => opt.name === 'url');
-        const zipUrl = urlOption.value;
-        const lockKey = `build_lock:${userId}`;
-
-        const existingLock = await env.TICKETS.get(lockKey);
-        if (existingLock) {
-          return Response.json({
-            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { content: '⚠️ **ERRO:** Você já tem uma compilação em andamento. Aguarde!' }
-          });
-        }
-
+        const zipUrl = options.find(o => o.name === 'url').value;
         ctx.waitUntil((async () => {
-          await env.TICKETS.put(lockKey, 'active', { expirationTtl: 2400 });
+          await env.TICKETS.put(`build_lock:${userId}`, 'active', { expirationTtl: 2400 });
           await fetch(`https://api.github.com/repos/${env.GITHUB_USER}/${env.GITHUB_REPO}/actions/workflows/engine.yml/dispatches`, {
             method: 'POST',
-            headers: {
-              'Authorization': `token ${env.GITHUB_TOKEN}`,
-              'Accept': 'application/vnd.github.v3+json',
-              'User-Agent': 'Cloudflare-Worker'
-            },
-            body: JSON.stringify({
-              ref: 'main',
-              inputs: { zip_url: zipUrl.trim(), channel_id: interaction.channel_id, user_id: userId, worker_url: new URL(request.url).origin }
-            })
+            headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'CF' },
+            body: JSON.stringify({ ref: 'main', inputs: { zip_url: zipUrl.trim(), channel_id: interaction.channel_id, user_id: userId, worker_url: url.origin } })
           });
         })());
-
-        return Response.json({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: `💻 **BUILD INICIADO!**\nEnviarei o link do APK neste canal assim que terminar.` }
-        });
+        return Response.json({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: '💻 **Build iniciado!**' } });
       }
 
-      // Comando /destravar
       if (name === 'destravar') {
-        const usuarioOption = options && options.find(opt => opt.name === 'usuario');
-        const targetUserId = usuarioOption ? usuarioOption.value : userId;
-        await env.TICKETS.delete(`build_lock:${targetUserId}`);
-        return Response.json({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: `🔓 **TRAVA REMOVIDA!** O usuário <@${targetUserId}> já pode compilar novamente.` }
-        });
+        const target = options?.find(o => o.name === 'usuario')?.value || userId;
+        await env.TICKETS.delete(`build_lock:${target}`);
+        return Response.json({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: `🔓 Destravado <@${target}>!` } });
       }
 
-      // Comando /setup-ticket
       if (name === 'setup-ticket') {
-        return Response.json({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            embeds: [{
-              title: '🎫 Suporte & Compilação',
-              description: 'Clique no botão abaixo para abrir um canal de atendimento privado.',
-              color: 5814783,
-            }],
-            components: [{
-              type: 1,
-              components: [{ type: 2, style: 1, label: 'Abrir Ticket', custom_id: 'abrir_ticket', emoji: { name: '🎫' } }]
-            }]
-          }
-        });
+        return Response.json({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { embeds: [{ title: '🎫 Suporte', description: 'Abra um ticket abaixo.', color: 5814783 }], components: [{ type: 1, components: [{ type: 2, style: 1, label: 'Abrir Ticket', custom_id: 'abrir_ticket', emoji: { name: '🎫' } }] }] } });
       }
     }
 
-    // 5. Tratamento de Botões (Message Components)
+    // 4. Botões e Modais
     if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
       const { custom_id } = interaction.data;
 
-      // Clique em "Abrir Ticket"
       if (custom_id === 'abrir_ticket') {
-        const guildId = interaction.guild_id;
-        const userId = interaction.member.user.id;
-
         ctx.waitUntil((async () => {
-          try {
-            const createChannelRes = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
-              method: 'POST',
-              headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                name: `【🔨】ᴄᴏᴍᴘɪʟᴀʀ-${Math.floor(Math.random() * 9000) + 1000}`,
-                type: 0,
-                parent_id: '1510734520553308160',
-                permission_overwrites: [
-                  { id: guildId, type: 0, deny: '1024' },
-                  { id: userId, type: 1, allow: '3072' }
-                ]
-              })
-            });
-            const newChannel = await createChannelRes.json();
-            await fetch(`https://discord.com/api/v10/channels/${newChannel.id}/messages`, {
-              method: 'POST',
-              headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                embeds: [{
-                  title: '🔨 Área de Compilação',
-                  description: `Olá <@${userId}>!\n\nPronto para compilar a sua Source Code?\nClique no botão abaixo para preencher o formulário.`,
-                  color: 3447003
-                }],
-                components: [{
-                  type: 1,
-                  components: [
-                    { type: 2, style: 1, label: 'Compilar APK', custom_id: 'compilar_apk', emoji: { name: '🔨' } },
-                    { type: 2, style: 4, label: 'Fechar Ticket', custom_id: 'fechar_ticket', emoji: { name: '🔒' } }
-                  ]
-                }]
-              })
-            });
-          } catch (e) { console.error(e); }
+          const res = await fetch(`https://discord.com/api/v10/guilds/${interaction.guild_id}/channels`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: `ticket-${Math.floor(Math.random() * 9000)}`, type: 0, parent_id: '1510734520553308160', permission_overwrites: [{ id: interaction.guild_id, type: 0, deny: '1024' }, { id: userId, type: 1, allow: '3072' }] })
+          });
+          const channel = await res.json();
+          await fetch(`https://discord.com/api/v10/channels/${channel.id}/messages`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: `Olá <@${userId}>!`, components: [{ type: 1, components: [{ type: 2, style: 1, label: 'Compilar APK', custom_id: 'compilar_apk' }, { type: 2, style: 4, label: 'Fechar', custom_id: 'fechar_ticket' }] }] })
+          });
         })());
-
-        return Response.json({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { flags: 64, content: '✅ **TICKET CRIADO!** Verifique a lista de canais.' }
-        });
+        return Response.json({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: 64, content: '✅ Ticket aberto!' } });
       }
 
-      // Clique em "Compilar APK" dentro do Ticket
       if (custom_id === 'compilar_apk') {
-        const userId = interaction.member?.user?.id || interaction.user?.id;
-        return Response.json({
-          type: 9, // MODAL
-          data: {
-            title: 'Compilar Source Code',
-            custom_id: 'modal_compilar',
-            components: [
-              {
-                type: 1,
-                components: [{
-                  type: 4,
-                  custom_id: 'zip_url_input',
-                  label: 'Link direto do arquivo (.zip)',
-                  style: 1,
-                  placeholder: 'https://...',
-                  required: true
-                }]
-              },
-              {
-                type: 1,
-                components: [{
-                  type: 4,
-                  custom_id: 'zip_password_input',
-                  label: 'Senha do .zip (opcional)',
-                  style: 1,
-                  placeholder: 'Deixe em branco se não tiver',
-                  required: false
-                }]
-              }
-            ]
-          }
-        });
+        return Response.json({ type: 9, data: { title: 'Build', custom_id: 'modal_compilar', components: [{ type: 1, components: [{ type: 4, custom_id: 'url', label: 'Link ZIP', style: 1, required: true }] }, { type: 1, components: [{ type: 4, custom_id: 'pass', label: 'Senha', style: 1, required: false }] }] } });
       }
 
-      // Clique em "Fechar Ticket"
       if (custom_id === 'fechar_ticket') {
-        ctx.waitUntil(
-          new Promise(resolve => setTimeout(resolve, 3000)).then(() =>
-            fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}`, {
-              method: 'DELETE',
-              headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` }
-            })
-          )
-        );
-        return Response.json({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: '🔒 Este ticket será fechado em instantes...' }
-        });
+        ctx.waitUntil(new Promise(r => setTimeout(r, 2000)).then(() => fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}`, { method: 'DELETE', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` } })));
+        return Response.json({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: '🔒 Fechando...' } });
       }
     }
 
-    // 6. Tratamento de Modais
     if (interaction.type === 5) {
-      const { custom_id, components } = interaction.data;
-      if (custom_id === 'modal_compilar') {
-        const zipUrl = components[0].components[0].value;
-        const zipPassword = components[1].components[0].value || '';
-        const userId = interaction.member?.user?.id || interaction.user?.id;
-        const lockKey = `build_lock:${userId}`;
-
-        ctx.waitUntil((async () => {
-          await env.TICKETS.put(lockKey, 'active', { expirationTtl: 2400 });
-          await fetch(`https://api.github.com/repos/${env.GITHUB_USER}/${env.GITHUB_REPO}/actions/workflows/engine.yml/dispatches`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `token ${env.GITHUB_TOKEN}`,
-              'Accept': 'application/vnd.github.v3+json',
-              'User-Agent': 'Cloudflare-Worker'
-            },
-            body: JSON.stringify({
-              ref: 'main',
-              inputs: { zip_url: zipUrl.trim(), zip_password: zipPassword.trim(), channel_id: interaction.channel_id, user_id: userId, worker_url: new URL(request.url).origin }
-            })
-          });
-        })());
-
-        return Response.json({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: `💻 **COMPILAÇÃO INICIADA!**\n🔗 **Source:** <${zipUrl}>` }
+      const zipUrl = interaction.data.components[0].components[0].value;
+      const zipPass = interaction.data.components[1].components[0].value || '';
+      ctx.waitUntil((async () => {
+        await env.TICKETS.put(`build_lock:${userId}`, 'active', { expirationTtl: 2400 });
+        await fetch(`https://api.github.com/repos/${env.GITHUB_USER}/${env.GITHUB_REPO}/actions/workflows/engine.yml/dispatches`, {
+          method: 'POST',
+          headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'CF' },
+          body: JSON.stringify({ ref: 'main', inputs: { zip_url: zipUrl.trim(), zip_password: zipPass.trim(), channel_id: interaction.channel_id, user_id: userId, worker_url: url.origin } })
         });
-      }
+      })());
+      return Response.json({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: '💻 **Build Iniciado!**' } });
     }
 
     return new Response('Not Found', { status: 404 });
   }
-};
-  } catch (err) {
+});
+
+          } catch (err) {
             console.error(err);
             // Atualiza a resposta inicial com o erro
             await fetch(`https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, {

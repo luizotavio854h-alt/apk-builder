@@ -1,3 +1,5 @@
+
+index_definitivo.js
 import { InteractionType, InteractionResponseType, verifyKey } from 'discord-interactions';
 
 export default {
@@ -33,36 +35,24 @@ export default {
     const timestamp = request.headers.get('x-signature-timestamp');
     const body = await request.clone().text();
     
-    console.log('Validating signature with key:', env.DISCORD_PUBLIC_KEY ? 'EXISTS' : 'MISSING');
-
     const isValidRequest = await verifyKey(body, signature, timestamp, env.DISCORD_PUBLIC_KEY);
     if (!isValidRequest) {
-      console.log('Signature validation FAILED');
       return new Response('Bad request signature.', { status: 401 });
     }
     
-    console.log('Signature validation SUCCESS');
     const interaction = JSON.parse(body);
 
-    // Responde ao PING de verificação do Discord
     if (interaction.type === InteractionType.PING) {
       return Response.json({ type: InteractionResponseType.PONG });
     }
 
-    // 1. Tratamento de Comandos de Barra (Slash Commands)
+    // 1. Slash Commands
     if (interaction.type === InteractionType.APPLICATION_COMMAND) {
       const { name, options } = interaction.data;
 
-      // Comando /preview-layout (Renderiza XML Android)
+      // /preview-layout
       if (name === 'preview-layout') {
         const attachmentOption = options && options.find(opt => opt.name === 'arquivo');
-        if (!attachmentOption) {
-          return Response.json({
-            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { content: '❌ Por favor, anexe um arquivo .xml para o preview.' }
-          });
-        }
-
         const attachment = interaction.data.resolved.attachments[attachmentOption.value];
         const xmlUrl = attachment.url;
         const userId = interaction.member?.user?.id || interaction.user?.id;
@@ -85,41 +75,27 @@ export default {
                 user_id: userId
               }
             })
-          }).then(async (res) => {
-            if (!res.ok) {
-              const errText = await res.text();
-              console.error(`Erro ao disparar Preview Action: ${errText}`);
-            }
           })
         );
 
         return Response.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: `🖼️ **GERANDO PREVIEW...**\nEstou processando o seu arquivo XML. Em breve enviarei a imagem renderizada aqui mesmo!`
-          }
+          data: { content: `🖼️ **GERANDO PREVIEW...**\nEstou processando o seu arquivo XML. Em breve enviarei a imagem renderizada aqui!` }
         });
       }
 
-      // Comando /compilar
+      // /compilar
       if (name === 'compilar') {
         const urlOption = options && options.find(opt => opt.name === 'url');
-        const zipUrl = urlOption ? urlOption.value : null;
-
-        if (!zipUrl || (!zipUrl.startsWith('http://') && !zipUrl.startsWith('https://'))) {
-          return Response.json({
-            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { content: '❌ URL inválida. Forneça uma URL que comece com http ou https.' }
-          });
-        }
-
+        const zipUrl = urlOption.value;
         const userId = interaction.member?.user?.id || interaction.user?.id;
         const lockKey = `build_lock:${userId}`;
+
         const existingLock = await env.TICKETS.get(lockKey);
         if (existingLock) {
           return Response.json({
             type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { content: '⚠️ **Compilação em andamento!** Você já possui uma compilação ativa. Por favor, aguarde a conclusão antes de iniciar uma nova.' }
+            data: { content: '⚠️ **Compilação em andamento!** Por favor, aguarde.' }
           });
         }
 
@@ -145,153 +121,59 @@ export default {
                 worker_url: workerUrl
               }
             })
-          }).then(async (res) => {
-            if (!res.ok) {
-              const errText = await res.text();
-              console.error(`Erro ao disparar Action: ${errText}`);
-              await env.TICKETS.delete(lockKey);
-            }
-          }).catch(async (err) => {
-            console.error('Erro de rede ao disparar GitHub Actions', err);
-            await env.TICKETS.delete(lockKey);
           })
         );
 
         return Response.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: `💻 **COMPILAÇÃO INICIADA!**\n\n📡 Conectando aos servidores do GitHub...\n🔗 **Source Code:** ${zipUrl}\n\n_Quando a compilação terminar (em média 5 a 15 minutos), enviarei o link do APK final aqui mesmo neste canal!_`
-          }
+          data: { content: `💻 **COMPILAÇÃO INICIADA!**\n🔗 **Source:** ${zipUrl}` }
         });
       }
 
-      // Comando /destravar
+      // /destravar
       if (name === 'destravar') {
         const usuarioOption = options && options.find(opt => opt.name === 'usuario');
-        const targetUserId = usuarioOption ? usuarioOption.value : null;
-        const callerId = interaction.member?.user?.id || interaction.user?.id;
-        
-        if (targetUserId && targetUserId !== callerId) {
-          const permissions = interaction.member?.permissions;
-          const isAdmin = permissions && (BigInt(permissions) & 8n) === 8n;
-          if (!isAdmin) {
-            return Response.json({
-              type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-              data: {
-                flags: 64, // Ephemeral
-                content: '❌ **Erro de Permissão:** Apenas administradores podem destravar a compilação de outros usuários.'
-              }
-            });
-          }
-        }
-
-        const finalUserId = targetUserId || callerId;
-        const lockKey = `build_lock:${finalUserId}`;
-        const existingLock = await env.TICKETS.get(lockKey);
-
-        if (!existingLock) {
-          return Response.json({
-            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: {
-              flags: 64, // Ephemeral
-              content: targetUserId 
-                ? `❌ O usuário <@${finalUserId}> não possui nenhuma trava de compilação ativa.` 
-                : '❌ Você não possui nenhuma trava de compilação ativa.'
-            }
-          });
-        }
-
-        await env.TICKETS.delete(lockKey);
-
+        const targetUserId = usuarioOption ? usuarioOption.value : (interaction.member?.user?.id || interaction.user?.id);
+        await env.TICKETS.delete(`build_lock:${targetUserId}`);
         return Response.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: `🔓 **TRAVA LIBERADA!** A trava de compilação do usuário <@${finalUserId}> foi removida e ele já pode iniciar um novo build.`
-          }
+          data: { content: `🔓 **TRAVA LIBERADA!** para <@${targetUserId}>.` }
         });
       }
 
-      // Comando /setup-ticket
+      // /setup-ticket
       if (name === 'setup-ticket') {
         return Response.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
           data: {
-            embeds: [
-              {
-                title: '🎫 Suporte & Compilação de APK',
-                description: 'Precisa de ajuda ou quer compilar sua Source Code do SA-MP Mobile?\n\nClique no botão abaixo para abrir um canal de atendimento privado.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n🔒 Só você e a nossa equipe terão acesso ao canal\n⚡ Resposta rápida garantida\n🔨 Compilações de APK feitas automaticamente\n━━━━━━━━━━━━━━━━━━━━━━━━━━',
-                color: 5814783,
-              }
-            ],
-            components: [
-              {
-                type: 1,
-                components: [
-                  {
-                    type: 2,
-                    style: 1,
-                    label: 'Abrir Ticket',
-                    custom_id: 'abrir_ticket',
-                    emoji: { name: '🎫' }
-                  }
-                ]
-              }
-            ]
+            embeds: [{
+              title: '🎫 Suporte & Compilação',
+              description: 'Clique no botão abaixo para abrir um ticket.',
+              color: 5814783,
+            }],
+            components: [{
+              type: 1,
+              components: [{ type: 2, style: 1, label: 'Abrir Ticket', custom_id: 'abrir_ticket', emoji: { name: '🎫' } }]
+            }]
           }
         });
       }
     }
 
-    // 2. Tratamento de Cliques em Botões (Message Components)
+    // 2. Buttons
     if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
       const { custom_id } = interaction.data;
-
-      // Clique em "Abrir Ticket"
       if (custom_id === 'abrir_ticket') {
         const guildId = interaction.guild_id;
         const userId = interaction.member.user.id;
 
-        if (!env.DISCORD_BOT_TOKEN) {
-          return Response.json({
-            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { flags: 64, content: '❌ Erro interno: O segredo DISCORD_BOT_TOKEN não foi configurado.' }
-          });
-        }
-
         ctx.waitUntil((async () => {
           try {
-            const channelsRes = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
-              headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` }
-            });
-            let ticketNumber = 1;
-            if (channelsRes.ok) {
-              const channels = await channelsRes.json();
-              const activeTickets = channels.filter(c => c.parent_id === '1510734520553308160');
-              const userAlreadyHasTicket = activeTickets.some(channel => 
-                channel.permission_overwrites && 
-                channel.permission_overwrites.some(overwrite => overwrite.id === userId)
-              );
-
-              if (userAlreadyHasTicket) {
-                await fetch(`https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ content: '❌ **Você já possui um ticket de compilação aberto!** Por favor, feche-o antes de tentar abrir um novo.' })
-                });
-                return;
-              }
-
-              const counterVal = await env.TICKETS.get('ticket_counter');
-              if (counterVal) ticketNumber = parseInt(counterVal) + 1;
-              while (activeTickets.some(c => c.name.includes(`compilar-${ticketNumber}`))) ticketNumber++;
-              await env.TICKETS.put('ticket_counter', ticketNumber.toString());
-            }
-
             const createChannelRes = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
               method: 'POST',
               headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                name: `【🔨】ᴄᴏᴍᴘɪʟᴀʀ-${ticketNumber}`,
+                name: `【🔨】ᴄᴏᴍᴘɪʟᴀʀ-${Math.floor(Math.random() * 1000)}`,
                 type: 0,
                 parent_id: '1510734520553308160',
                 permission_overwrites: [
@@ -300,40 +182,21 @@ export default {
                 ]
               })
             });
-
-            if (!createChannelRes.ok) throw new Error(`Discord API error: ${createChannelRes.statusText}`);
             const newChannel = await createChannelRes.json();
-
             await fetch(`https://discord.com/api/v10/channels/${newChannel.id}/messages`, {
               method: 'POST',
               headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                embeds: [{
-                  title: '🔨 Área de Compilação',
-                  description: `Olá <@${userId}>!\n\nPronto para compilar a sua Source Code do SA-MP Mobile?\nClique no botão abaixo para preencher o formulário.`,
-                  color: 3447003
-                }],
-                components: [{
-                  type: 1,
-                  components: [
-                    { type: 2, style: 1, label: 'Compilar APK', custom_id: 'compilar_apk', emoji: { name: '🔨' } },
-                    { type: 2, style: 4, label: 'Fechar Ticket', custom_id: 'fechar_ticket', emoji: { name: '🔒' } }
-                  ]
-                }]
+                content: `Olá <@${userId}>! Use /compilar para começar.`
               })
             });
-
-            await fetch(`https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ content: `✅ Seu ticket de compilação foi aberto com sucesso em <#${newChannel.id}>!` })
-            });
-          } catch (err) {
-            console.error(err);
-          }
+          } catch (e) { console.error(e); }
         })());
 
-        return Response.json({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+        return Response.json({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { flags: 64, content: '✅ Ticket aberto!' }
+        });
       }
     });
 

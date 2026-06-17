@@ -1,10 +1,10 @@
-name = "samp-compiler-bot"
+name = "apk-builder"
 main = "src/index.js"
 compatibility_date = "2023-10-30"
 
 [vars]
 GITHUB_USER = "48348484488"
-GITHUB_REPO = "SAMP-Discord-Bot-Repo"
+GITHUB_REPO = "apk-builder"
 
 [[kv_namespaces]]
 binding = "TICKETS"

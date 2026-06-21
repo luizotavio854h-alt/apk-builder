@@ -1,19 +1,14 @@
-export async function callAIEditorFromZip(instruction, zipBuffer, apiKey) {
+export async function callAIEditor(instruction, files, apiKey) {
   const prompt = `
 Você é um engenheiro Android senior.
-
-Você recebe um ZIP de projeto Android.
 
 INSTRUÇÃO:
 ${instruction}
 
-Regras:
-- manter projeto compilável
-- não quebrar Gradle
-- não quebrar XML
-- não remover arquivos essenciais
+Arquivos:
+${JSON.stringify(files)}
 
-Retorne o projeto editado.
+Mantenha o projeto compilável.
 `;
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -33,5 +28,10 @@ Retorne o projeto editado.
   });
 
   const data = await res.json();
-  return data.choices[0].message.content;
+
+  return {
+    files: {
+      "result.txt": data.choices?.[0]?.message?.content || ""
+    }
+  };
 }

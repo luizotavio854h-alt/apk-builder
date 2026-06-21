@@ -55,57 +55,72 @@ export default {
       const { name, options } = interaction.data;
 
       if (name === 'editar') {
-  const instruction = options?.find(opt => opt.name === 'instruction')?.value;
-  const filesInput = options?.find(opt => opt.name === 'files')?.value;
+  const url = options?.find(o => o.name === 'url')?.value;
+  const instruction = options?.find(o => o.name === 'instruction')?.value;
 
-  if (!instruction || !filesInput) {
+  if (!url || !instruction) {
     return Response.json({
       type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: '❌ Faltando instruction ou files' }
+      data: { content: "❌ Faltando URL ou instrução" }
     });
   }
 
-  let files;
-
-  try {
-    files = JSON.parse(filesInput);
-  } catch (err) {
-    return Response.json({
-      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: '❌ files precisa ser JSON válido' }
-    });
-  }
-
-  // ⚠️ RESPOSTA RÁPIDA (EVITA TIMEOUT DO DISCORD)
-  const deferResponse = Response.json({
+  const defer = Response.json({
     type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
   });
 
   ctx.waitUntil((async () => {
     try {
-      const result = await callAIEditor(
+      const zipRes = await fetch(url);
+      if (!zipRes.ok) throw new Error("Erro ao baixar ZIP");
+
+      const zipBuffer = await zipRes.arrayBuffer();
+
+      const result = await callAIEditorFromZip(
         instruction,
-        files,
+        zipBuffer,
         env.OPENAI_API_KEY
       );
 
+      const userId = interaction.user?.id || interaction.member?.user?.id;
+
+      // 🔥 SALVA NO R2
+      await env.STORAGE.put(`projects/${userId}.zip`, zipBuffer, {
+        httpMetadata: { contentType: "application/zip" }
+      });
+
+      // 🔥 EMBED + BOTÕES
       await fetch(
         `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
         {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            content: "✅ Projeto editado com sucesso pela IA!",
+            content: null,
             embeds: [
               {
-                title: "Arquivos modificados",
-                description: "IA retornou o projeto atualizado"
+                title: "✅ Projeto pronto",
+                description: "Escolha uma opção abaixo:",
+                color: 5814783
               }
             ],
-            attachments: [
+            components: [
               {
-                name: "project.json",
-                content: JSON.stringify(result.files, null, 2)
+                type: 1,
+                components: [
+                  {
+                    type: 2,
+                    style: 2,
+                    label: "📦 Baixar ZIP",
+                    custom_id: `download_zip_${userId}`
+                  },
+                  {
+                    type: 2,
+                    style: 1,
+                    label: "🔨 Compilar APK",
+                    custom_id: `compile_apk_${userId}`
+                  }
+                ]
               }
             ]
           })
@@ -116,17 +131,17 @@ export default {
       await fetch(
         `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
         {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            content: "❌ Erro na IA: " + err.message
+            content: "❌ Erro: " + err.message
           })
         }
       );
     }
   })());
 
-  return deferResponse;
+  return defer;
       }
 
       // Comando /compilar legado (caso alguém ainda use)
@@ -276,6 +291,71 @@ export default {
     // 2. Tratamento de Cliques em Botões (Message Components)
     if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
       const { custom_id } = interaction.data;
+
+      if (custom_id.startsWith('download_zip_')) {
+  const userId = interaction.member?.user?.id || interaction.user?.id;
+
+  const file = await env.STORAGE.get(`projects/${userId}.zip`);
+
+  if (!file) {
+    return Response.json({
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: { content: "❌ ZIP não encontrado" }
+    });
+  }
+
+  const buffer = await file.arrayBuffer();
+
+  return new Response(buffer, {
+    headers: {
+      "Content-Type": "application/zip",
+      "Content-Disposition": "attachment; filename=project.zip"
+    }
+  });
+      }
+
+      if (custom_id.startsWith('compile_apk_')) {
+  const userId = interaction.member?.user?.id || interaction.user?.id;
+
+  const lockKey = `build_lock:${userId}`;
+  const existingLock = await env.TICKETS.get(lockKey);
+
+  if (existingLock) {
+    return Response.json({
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: { content: "⚠️ Já existe build em andamento" }
+    });
+  }
+
+  await env.TICKETS.put(lockKey, "active", { expirationTtl: 2400 });
+
+  const githubUrl = `https://api.github.com/repos/${env.GITHUB_USER}/${env.GITHUB_REPO}/actions/workflows/engine.yml/dispatches`;
+
+  ctx.waitUntil(
+    fetch(githubUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": `token ${env.GITHUB_TOKEN}`,
+        "Accept": "application/vnd.github.v3+json",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        ref: "main",
+        inputs: {
+          user_id: userId,
+          mode: "ai_project"
+        }
+      })
+    })
+  );
+
+  return Response.json({
+    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+    data: {
+      content: "🔨 Build iniciado!"
+    }
+  });
+      }
 
       // Clique em "Abrir Ticket"
       if (custom_id === 'abrir_ticket') {

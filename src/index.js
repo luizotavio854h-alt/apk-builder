@@ -55,39 +55,78 @@ export default {
       const { name, options } = interaction.data;
 
       if (name === 'editar') {
-  const instructionOption = options?.find(opt => opt.name === 'instruction');
-  const filesOption = options?.find(opt => opt.name === 'files');
+  const instruction = options?.find(opt => opt.name === 'instruction')?.value;
+  const filesInput = options?.find(opt => opt.name === 'files')?.value;
 
-  const instruction = instructionOption?.value;
-  const files = JSON.parse(filesOption?.value || '{}');
-
-  if (!instruction || !files) {
+  if (!instruction || !filesInput) {
     return Response.json({
       type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
       data: { content: '❌ Faltando instruction ou files' }
     });
   }
 
-  const result = await callAIEditor(instruction, files, env.OPENAI_API_KEY);
+  let files;
 
-  return Response.json({
-    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-    data: {
-      content: "✅ Projeto editado com sucesso",
-      embeds: [
-        {
-          title: "Arquivos modificados",
-          description: "IA retornou o projeto atualizado"
-        }
-      ],
-      attachments: [
-        {
-          name: "project.json",
-          content: JSON.stringify(result.files, null, 2)
-        }
-      ]
-    }
+  try {
+    files = JSON.parse(filesInput);
+  } catch (err) {
+    return Response.json({
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: { content: '❌ files precisa ser JSON válido' }
+    });
+  }
+
+  // ⚠️ RESPOSTA RÁPIDA (EVITA TIMEOUT DO DISCORD)
+  const deferResponse = Response.json({
+    type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
   });
+
+  ctx.waitUntil((async () => {
+    try {
+      const result = await callAIEditor(
+        instruction,
+        files,
+        env.OPENAI_API_KEY
+      );
+
+      await fetch(
+        `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: "✅ Projeto editado com sucesso pela IA!",
+            embeds: [
+              {
+                title: "Arquivos modificados",
+                description: "IA retornou o projeto atualizado"
+              }
+            ],
+            attachments: [
+              {
+                name: "project.json",
+                content: JSON.stringify(result.files, null, 2)
+              }
+            ]
+          })
+        }
+      );
+
+    } catch (err) {
+      await fetch(
+        `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: "❌ Erro na IA: " + err.message
+          })
+        }
+      );
+    }
+  })());
+
+  return deferResponse;
       }
 
       // Comando /compilar legado (caso alguém ainda use)

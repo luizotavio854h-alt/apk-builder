@@ -1,26 +1,19 @@
-export async function callAIEditor(instruction, files, apiKey) {
+export async function callAIEditorFromZip(instruction, zipBuffer, apiKey) {
   const prompt = `
 Você é um engenheiro Android senior.
 
-Tarefa:
-- Edite o projeto Android conforme instrução
-- NÃO quebre Gradle
-- NÃO remova arquivos essenciais
-- Mantenha XML válido
-- Mantenha Kotlin/Java compilável
+Você recebe um ZIP de projeto Android.
 
 INSTRUÇÃO:
 ${instruction}
 
-ARQUIVOS:
-${JSON.stringify(files, null, 2)}
+Regras:
+- manter projeto compilável
+- não quebrar Gradle
+- não quebrar XML
+- não remover arquivos essenciais
 
-RETORNE APENAS JSON:
-{
-  "files": {
-    "path/file": "conteúdo atualizado"
-  }
-}
+Retorne o projeto editado.
 `;
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -32,7 +25,7 @@ RETORNE APENAS JSON:
     body: JSON.stringify({
       model: "gpt-4.1-mini",
       messages: [
-        { role: "system", content: "You are an Android build system expert." },
+        { role: "system", content: "You are an Android build AI." },
         { role: "user", content: prompt }
       ],
       temperature: 0.2
@@ -40,7 +33,5 @@ RETORNE APENAS JSON:
   });
 
   const data = await res.json();
-  const text = data.choices[0].message.content;
-
-  return JSON.parse(text);
+  return data.choices[0].message.content;
 }

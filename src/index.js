@@ -54,6 +54,42 @@ export default {
     if (interaction.type === InteractionType.APPLICATION_COMMAND) {
       const { name, options } = interaction.data;
 
+      if (name === 'editar') {
+  const instructionOption = options?.find(opt => opt.name === 'instruction');
+  const filesOption = options?.find(opt => opt.name === 'files');
+
+  const instruction = instructionOption?.value;
+  const files = JSON.parse(filesOption?.value || '{}');
+
+  if (!instruction || !files) {
+    return Response.json({
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: { content: '❌ Faltando instruction ou files' }
+    });
+  }
+
+  const result = await callAIEditor(instruction, files, env.OPENAI_API_KEY);
+
+  return Response.json({
+    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+    data: {
+      content: "✅ Projeto editado com sucesso",
+      embeds: [
+        {
+          title: "Arquivos modificados",
+          description: "IA retornou o projeto atualizado"
+        }
+      ],
+      attachments: [
+        {
+          name: "project.json",
+          content: JSON.stringify(result.files, null, 2)
+        }
+      ]
+    }
+  });
+      }
+
       // Comando /compilar legado (caso alguém ainda use)
       if (name === 'compilar') {
         const urlOption = options && options.find(opt => opt.name === 'url');

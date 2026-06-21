@@ -1,5 +1,5 @@
 import { InteractionType, InteractionResponseType, verifyKey } from 'discord-interactions';
-import { handlePreview } from './preview.js';
+import { callAIEditor } from './ai/editor.js';
 
 export default {
   async fetch(request, env, ctx) {

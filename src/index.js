@@ -55,94 +55,91 @@ export default {
       const { name, options } = interaction.data;
 
       if (name === 'editar') {
-  const url = options?.find(o => o.name === 'url')?.value;
-  const instruction = options?.find(o => o.name === 'instruction')?.value;
+        const url = options?.find(o => o.name === 'url')?.value;
+        const instruction = options?.find(o => o.name === 'instruction')?.value;
 
-  if (!url || !instruction) {
-    return Response.json({
-      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: "❌ Faltando URL ou instrução" }
-    });
-  }
-
-  const defer = Response.json({
-    type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
-  });
-
-  ctx.waitUntil((async () => {
-    try {
-      const zipRes = await fetch(url);
-      if (!zipRes.ok) throw new Error("Erro ao baixar ZIP");
-
-      const zipBuffer = await zipRes.arrayBuffer();
-
-      const result = await callAIEditorFromZip(
-        instruction,
-        zipBuffer,
-        env.OPENAI_API_KEY
-      );
-
-      const userId = interaction.user?.id || interaction.member?.user?.id;
-
-      // 🔥 SALVA NO R2
-      await env.STORAGE.put(`projects/${userId}.zip`, zipBuffer, {
-        httpMetadata: { contentType: "application/zip" }
-      });
-
-      // 🔥 EMBED + BOTÕES
-      await fetch(
-        `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            content: null,
-            embeds: [
-              {
-                title: "✅ Projeto pronto",
-                description: "Escolha uma opção abaixo:",
-                color: 5814783
-              }
-            ],
-            components: [
-              {
-                type: 1,
-                components: [
-                  {
-                    type: 2,
-                    style: 2,
-                    label: "📦 Baixar ZIP",
-                    custom_id: `download_zip_${userId}`
-                  },
-                  {
-                    type: 2,
-                    style: 1,
-                    label: "🔨 Compilar APK",
-                    custom_id: `compile_apk_${userId}`
-                  }
-                ]
-              }
-            ]
-          })
+        if (!url || !instruction) {
+          return Response.json({
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: { content: "❌ URL ou instrução faltando" }
+          });
         }
-      );
 
-    } catch (err) {
-      await fetch(
-        `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            content: "❌ Erro: " + err.message
-          })
-        }
-      );
-    }
-  })());
+        // DEFER correto
+        return Response.json({
+          type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+        });
 
-  return defer;
+        ctx.waitUntil((async () => {
+          try {
+            // 1. BAIXA ZIP
+            const files = await downloadAndExtractZip(url);
+
+            // 2. IA EDITA
+            const result = await callAIEditor(instruction, files, env.OPENAI_API_KEY);
+
+            // 3. REZIP
+            const zip = new JSZip();
+
+            for (const [path, content] of Object.entries(result.files)) {
+              zip.file(path, content);
+            }
+
+            const finalZip = await zip.generateAsync({ type: "arraybuffer" });
+
+            const userId = interaction.user?.id || interaction.member?.user?.id;
+
+            // 4. SALVA NO R2
+            await env.STORAGE.put(`projects/${userId}.zip`, finalZip, {
+              httpMetadata: { contentType: "application/zip" }
+            });
+
+            // 5. UPDATE DISCORD
+            await fetch(
+              `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
+              {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  content: null,
+                  embeds: [
+                    {
+                      title: "✅ Projeto pronto",
+                      description: "Escolha uma opção:",
+                      color: 5814783
+                    }
+                  ],
+                  components: [
+                    {
+                      type: 1,
+                      components: [
+                        {
+                          type: 2,
+                          style: 2,
+                          label: "📦 Baixar ZIP",
+                          custom_id: `download_zip_${userId}`
+                        },
+                        {
+                          type: 2,
+                          style: 1,
+                          label: "🔨 Compilar APK",
+                          custom_id: `compile_apk_${userId}`
+                        }
+                      ]
+                    }
+                  ]
+                })
+              }
+            );
+
+          } catch (err) {
+            console.error(err);
+          }
+        })());
+
+        return;
       }
+    }
 
       // Comando /compilar legado (caso alguém ainda use)
       if (name === 'compilar') {

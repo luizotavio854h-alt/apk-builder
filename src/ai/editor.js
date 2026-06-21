@@ -1,16 +1,4 @@
 export async function callAIEditor(instruction, files, apiKey) {
-  const prompt = `
-Você é um engenheiro Android senior.
-
-INSTRUÇÃO:
-${instruction}
-
-Arquivos:
-${JSON.stringify(files)}
-
-Mantenha o projeto compilável.
-`;
-
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -20,18 +8,43 @@ Mantenha o projeto compilável.
     body: JSON.stringify({
       model: "gpt-4.1-mini",
       messages: [
-        { role: "system", content: "You are an Android build AI." },
-        { role: "user", content: prompt }
+        {
+          role: "system",
+          content: `
+Você edita projetos Android Studio.
+
+REGRAS:
+- NÃO quebrar Gradle
+- NÃO remover arquivos
+- manter estrutura completa
+- retornar SOMENTE JSON:
+
+{
+  "files": {
+    "path/file": "conteudo"
+  }
+}
+`
+        },
+        {
+          role: "user",
+          content: `INSTRUÇÃO: ${instruction}\n\nPROJETO:\n${JSON.stringify(files)}`
+        }
       ],
       temperature: 0.2
     })
   });
 
   const data = await res.json();
+  const text = data.choices?.[0]?.message?.content || "{}";
 
-  return {
-    files: {
-      "result.txt": data.choices?.[0]?.message?.content || ""
-    }
-  };
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {
+      files: {
+        "error.txt": text
+      }
+    };
+  }
 }

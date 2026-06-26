@@ -7,6 +7,10 @@ export async function callAIEditor(instruction, files, apiKey) {
     },
     body: JSON.stringify({
       model: "gpt-4.1-mini",
+
+      // 🔥 FORÇA JSON (ESSENCIAL)
+      response_format: { type: "json_object" },
+
       messages: [
         {
           role: "system",
@@ -17,7 +21,7 @@ REGRAS:
 - NÃO quebrar Gradle
 - NÃO remover arquivos
 - manter estrutura completa
-- retornar SOMENTE JSON válido no formato:
+- retornar SOMENTE JSON no formato:
 
 {
   "files": {
@@ -31,16 +35,28 @@ REGRAS:
           content: `INSTRUÇÃO: ${instruction}\n\nPROJETO:\n${JSON.stringify(files)}`
         }
       ],
+
       temperature: 0.2
     })
   });
 
   const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || "{}";
+
+  const text = data.choices?.[0]?.message?.content;
+
+  if (!text) {
+    return {
+      files: {
+        "error.txt": "Empty AI response"
+      }
+    };
+  }
 
   try {
     return JSON.parse(text);
-  } catch {
+  } catch (e) {
+    console.log("AI INVALID JSON:", text);
+
     return {
       files: {
         "error.txt": text

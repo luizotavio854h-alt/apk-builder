@@ -17,7 +17,7 @@ REGRAS:
 - NÃO quebrar Gradle
 - NÃO remover arquivos
 - manter estrutura completa
-- retornar SOMENTE JSON:
+- retornar SOMENTE JSON válido no formato:
 
 {
   "files": {

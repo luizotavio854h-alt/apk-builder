@@ -9,12 +9,9 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-<<<<<<< HEAD
     "discord-interactions": "^4.1.0",
     "jszip": "^3.10.1"
-=======
     "discord-interactions": "^4.1.0"
->>>>>>> 5f0fe3fc43b277bd7e3eb030683f2ef21dd04003
   },
   "devDependencies": {
     "wrangler": "^3.0.0"

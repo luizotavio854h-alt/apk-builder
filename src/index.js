@@ -299,6 +299,7 @@ export default {
         });
       }
     }
+  }
 
     // 2. Tratamento de Cliques em Botões (Message Components)
     if (interaction.type === InteractionType.MESSAGE_COMPONENT) {

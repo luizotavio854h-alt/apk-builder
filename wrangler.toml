@@ -1,0 +1,21 @@
+name = "apk-builder"
+main = "src/index.js"
+compatibility_date = "2023-10-30"
+
+[vars]
+GITHUB_USER = "luizotavio854h-alt"
+GITHUB_REPO = "apk-builder"
+
+# 🧠 KV (locks, tickets, etc)
+[[kv_namespaces]]
+binding = "TICKETS"
+id = "3ed7420df8334d56a8f079c4d6592726"
+
+# 📦 R2 STORAGE (ZIPs do projeto editado pela IA)
+r2_buckets = [
+  { binding = "STORAGE", bucket_name = "ai-apk-builder" }
+]
+
+# ⏰ cron job (limpeza de tickets)
+[triggers]
+crons = ["0 * * * *"]

@@ -1,7 +1,7 @@
 {
   "name": "samp-discord-bot-cloudflare",
   "version": "1.0.0",
-  "description": "Discord Bot Serverless para compilar APK",
+  "description": "Discord Bot Serverless para compilar APKs",
   "main": "src/index.js",
   "type": "module",
   "scripts": {

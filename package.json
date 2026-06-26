@@ -1,7 +1,7 @@
 {
   "name": "samp-discord-bot-cloudflare",
   "version": "1.0.0",
-  "description": "Discord Bot Serverless para compilar APKs",
+  "description": "Discord Bot Serverless para compilar APK",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
@@ -11,20 +11,19 @@
   "dependencies": {
     "discord-interactions": "^4.1.0",
     "jszip": "^3.10.1"
-    "discord-interactions": "^4.1.0"
   },
   "devDependencies": {
     "wrangler": "^3.0.0"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/luizotavio854h-alt/apk-builder.git"
+    "url": "https://github.com/luizotavio854h-alt/apk-builder.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/48348484488/apk-builder/issues"
+    "url": "https://github.com/luizotavio854h-alt/apk-builder/issues"
   },
   "homepage": "https://github.com/luizotavio854h-alt/apk-builder#readme"
 }

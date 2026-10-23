@@ -62,6 +62,9 @@ jobs:
 
       - name: Configure Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # Do not request legacy SDK package "tools" (no longer available).
+          packages: "platform-tools"
 
       - name: Install required SDK packages
         env:

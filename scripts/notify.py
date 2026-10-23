@@ -29,10 +29,11 @@ payload = {
     'status': status,
 }
 if status == 'success':
-    # This is an artifact PAGE, not a direct APK download.
-    # Existing Worker expects download_url; label should be adjusted accordingly.
-    if artifact_url:
-        payload['download_url'] = artifact_url
+    from pathlib import Path
+    link_file = Path('apk_download_url.txt')
+    if not link_file.exists():
+        raise SystemExit('Missing APK site link from build job')
+    payload['download_url'] = link_file.read_text().strip()
 else:
     payload['error'] = 'Compilação não concluída (' + result + '). Consulte os logs da execução.'
 

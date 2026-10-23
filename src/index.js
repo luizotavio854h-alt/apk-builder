@@ -9,8 +9,8 @@ import JSZip from "jszip";
 
 // ============================================
 // 💙 AURORA NETWORK — AURORA AI
-// Discord Bot + Cloudflare Workers + R2
-// Tickets, Sources, IA e Compilação Android
+// Discord + Cloudflare Workers + R2
+// Tickets, Sources, IA, Build e Registro Cloud
 // ============================================
 
 const API = "https://discord.com/api/v10";
@@ -45,6 +45,13 @@ const STATUS = {
       "⚠️ Não foi possível concluir a compilação.\n" +
       "📋 Consulte os detalhes do erro.",
     color: 0xe74c3c
+  },
+  cancelled: {
+    title: "🛑 Aurora Build | Trava liberada",
+    description:
+      "🔓 A trava de compilação foi removida.\n" +
+      "⚠️ A execução remota pode continuar.",
+    color: 0x95a5a6
   }
 };
 
@@ -75,6 +82,7 @@ const defer = () =>
 function https(url) {
   try {
     const u = new URL(url);
+
     return (
       u.protocol === "https:" &&
       !["localhost", "127.0.0.1", "0.0.0.0"].includes(
@@ -124,7 +132,225 @@ async function editReply(i, data) {
   );
 
   if (!response.ok) {
-    throw new Error("Falha ao atualizar resposta.");
+    throw new Error(
+      `Falha ao atualizar resposta (${response.status}).`
+    );
+  }
+}
+
+// ============================================
+// 💙 REGISTRO DOS COMANDOS — CLOUD
+// ============================================
+
+const AURORA_COMMANDS = [
+  {
+    name: "setup-ticket",
+    description: "Publica o painel de tickets",
+    default_member_permissions: "8"
+  },
+  {
+    name: "ticket",
+    description: "Abre um ticket privado"
+  },
+  {
+    name: "fechar-ticket",
+    description: "Encerra o ticket atual"
+  },
+  {
+    name: "importar",
+    description: "Importa uma source ZIP",
+    options: [{
+      name: "url",
+      description: "URL HTTPS direta do arquivo ZIP",
+      type: 3,
+      required: true
+    }]
+  },
+  {
+    name: "enviar-source",
+    description: "Envia uma source para o ticket",
+    options: [{
+      name: "url",
+      description: "URL HTTPS direta do arquivo ZIP",
+      type: 3,
+      required: true
+    }]
+  },
+  {
+    name: "sources",
+    description: "Lista suas sources"
+  },
+  {
+    name: "versoes",
+    description: "Consulta as versões das sources"
+  },
+  {
+    name: "historico",
+    description: "Consulta o histórico das sources"
+  },
+  {
+    name: "editar",
+    description: "Edita uma source com Aurora AI"
+  },
+  {
+    name: "aprovar",
+    description: "Aprova uma versão editada",
+    options: [{
+      name: "id",
+      description: "Identificador da versão",
+      type: 3,
+      required: true
+    }]
+  },
+  {
+    name: "rejeitar",
+    description: "Rejeita uma versão editada",
+    options: [{
+      name: "id",
+      description: "Identificador da versão",
+      type: 3,
+      required: true
+    }]
+  },
+  {
+    name: "baixar",
+    description: "Baixa uma source",
+    options: [{
+      name: "id",
+      description: "Identificador da versão",
+      type: 3,
+      required: true
+    }]
+  },
+  {
+    name: "compilar",
+    description: "Inicia uma compilação Android",
+    options: [{
+      name: "url",
+      description: "URL HTTPS da source ZIP",
+      type: 3,
+      required: false
+    }]
+  },
+  {
+    name: "destravar",
+    description: "Libera uma trava de compilação",
+    options: [{
+      name: "usuario",
+      description: "Usuário a destravar (administradores)",
+      type: 6,
+      required: false
+    }]
+  },
+  {
+    name: "builds",
+    description: "Consulta a compilação ativa"
+  },
+  {
+    name: "seguranca",
+    description: "Consulta as configurações de segurança",
+    default_member_permissions: "8"
+  },
+  {
+    name: "registrar",
+    description: "Atualiza os comandos da Aurora AI",
+    default_member_permissions: "8"
+  },
+  {
+    name: "parar-build",
+    description: "Libera uma compilação travada",
+    options: [{
+      name: "usuario",
+      description: "Usuário (administradores)",
+      type: 6,
+      required: false
+    }]
+  }
+];
+
+async function registerCommands(env, guildId) {
+  if (!env.DISCORD_APPLICATION_ID) {
+    throw new Error(
+      "DISCORD_APPLICATION_ID não configurado."
+    );
+  }
+
+  if (!env.DISCORD_BOT_TOKEN) {
+    throw new Error(
+      "DISCORD_BOT_TOKEN não configurado."
+    );
+  }
+
+  if (!/^\d{17,22}$/.test(String(guildId || ""))) {
+    throw new Error("DISCORD_GUILD_ID inválido.");
+  }
+
+  const endpoint =
+    `${API}/applications/` +
+    `${env.DISCORD_APPLICATION_ID}/guilds/` +
+    `${guildId}/commands`;
+
+  const response = await fetch(endpoint, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(AURORA_COMMANDS)
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Discord HTTP ${response.status}: ` +
+      (await response.text()).slice(0, 350)
+    );
+  }
+
+  const commands = await response.json();
+
+  return commands.map(command => command.name);
+}
+
+async function registerRoute(request, env) {
+  if (request.method !== "POST") {
+    return new Response("Method Not Allowed", {
+      status: 405
+    });
+  }
+
+  const authorization =
+    request.headers.get("Authorization");
+
+  if (
+    !env.REGISTER_SECRET ||
+    authorization !== `Bearer ${env.REGISTER_SECRET}`
+  ) {
+    return new Response("Unauthorized", {
+      status: 401
+    });
+  }
+
+  try {
+    const commands = await registerCommands(
+      env,
+      env.DISCORD_GUILD_ID
+    );
+
+    return Response.json({
+      ok: true,
+      message: "Aurora AI atualizada com sucesso!",
+      count: commands.length,
+      commands
+    });
+  } catch (error) {
+    console.error("Aurora Register:", error);
+
+    return Response.json({
+      ok: false,
+      error: String(error.message)
+    }, {
+      status: 502
+    });
   }
 }
 
@@ -189,6 +415,7 @@ async function createTicket(i, env) {
   if (existing) {
     try {
       await discord(env, `/channels/${existing}`);
+
       return `⚠️ Você já possui um ticket: <#${existing}>`;
     } catch {
       await env.TICKETS.delete(ticketKey);
@@ -231,6 +458,7 @@ async function createTicket(i, env) {
   );
 
   await env.TICKETS.put(ticketKey, channel.id);
+
   await env.TICKETS.put(
     `owner:${channel.id}`,
     userId
@@ -315,21 +543,19 @@ async function closeTicket(i, env) {
   );
 
   if (!owner) {
-    return reply("❌ Este canal não é um ticket.", true);
+    return;
   }
 
   if (owner !== uid(i) && !admin(i)) {
-    return reply("❌ Você não possui permissão.", true);
+    return;
   }
 
   if (await env.TICKETS.get(`build_lock:${owner}`)) {
-    return reply(
-      "⚠️ Aguarde a compilação terminar antes de fechar o ticket.",
-      true
-    );
+    return;
   }
 
   await env.TICKETS.delete(`owner:${i.channel_id}`);
+
   await env.TICKETS.delete(
     `ticket:${i.guild_id}:${owner}`
   );
@@ -339,12 +565,10 @@ async function closeTicket(i, env) {
     `/channels/${i.channel_id}`,
     { method: "DELETE" }
   );
-
-  return reply("🔒 Ticket encerrado.", true);
 }
 
 // ============================================
-// 📦 DOWNLOAD E IMPORTAÇÃO DE SOURCES
+// 📦 IMPORTAÇÃO DE SOURCES
 // ============================================
 
 async function fetchZip(url) {
@@ -436,13 +660,14 @@ async function importSource(i, env, url) {
     });
   } catch (error) {
     await editReply(i, {
-      content: `❌ Falha na importação: ${error.message}`
+      content:
+        `❌ Falha na importação: ${error.message}`
     });
   }
 }
 
 // ============================================
-// 🧠 AURORA AI — EDITOR DE SOURCES
+// 🧠 AURORA AI — EDITOR
 // ============================================
 
 async function aiEdit(buffer, instruction, env) {
@@ -493,7 +718,9 @@ async function aiEdit(buffer, instruction, env) {
   }
 
   if (!files.length) {
-    throw new Error("Nenhum arquivo editável encontrado.");
+    throw new Error(
+      "Nenhum arquivo editável encontrado."
+    );
   }
 
   const response = await fetch(
@@ -541,6 +768,7 @@ async function aiEdit(buffer, instruction, env) {
   }
 
   const json = await response.json();
+
   const raw =
     json.choices?.[0]?.message?.content || "";
 
@@ -718,7 +946,9 @@ async function editTask(i, env, sourceId, instruction) {
     const object = await env.STORAGE.get(fileKey);
 
     if (!object) {
-      throw new Error("Arquivo não encontrado no R2.");
+      throw new Error(
+        "Arquivo não encontrado no R2."
+      );
     }
 
     const result = await aiEdit(
@@ -805,7 +1035,9 @@ async function signDownload(env, path, expires) {
 
 async function makeDownloadLink(env, request, key) {
   if (!env.DOWNLOAD_SECRET) {
-    throw new Error("DOWNLOAD_SECRET não configurado.");
+    throw new Error(
+      "DOWNLOAD_SECRET não configurado."
+    );
   }
 
   const exp = Date.now() + 600000;
@@ -842,7 +1074,11 @@ async function serveDownload(request, env) {
     });
   }
 
-  const expected = await signDownload(env, key, exp);
+  const expected = await signDownload(
+    env,
+    key,
+    exp
+  );
 
   if (sig !== expected) {
     return new Response("Assinatura inválida", {
@@ -868,16 +1104,26 @@ async function serveDownload(request, env) {
   });
 }
 
-async function manageVersion(i, env, action, id, request) {
+async function manageVersion(
+  i,
+  env,
+  action,
+  id,
+  request
+) {
   const sources = await getSources(i, env);
   const source = sources.find(x => x.id === id);
 
   if (!source) {
-    return reply("❌ Versão não encontrada.", true);
+    return reply(
+      "❌ Versão não encontrada.",
+      true
+    );
   }
 
   if (action === "baixar") {
-    const editedKey = `${source.prefix}-edited.zip`;
+    const editedKey =
+      `${source.prefix}-edited.zip`;
 
     const key =
       source.status !== "rejected" &&
@@ -886,7 +1132,10 @@ async function manageVersion(i, env, action, id, request) {
         : `${source.prefix}-original.zip`;
 
     if (!(await env.STORAGE.head(key))) {
-      return reply("❌ ZIP indisponível.", true);
+      return reply(
+        "❌ ZIP indisponível.",
+        true
+      );
     }
 
     const link = await makeDownloadLink(
@@ -955,7 +1204,8 @@ function buildModal() {
             custom_id: "zip_password_input",
             label: "Senha do ZIP (opcional)",
             style: 1,
-            placeholder: "Deixe em branco se não tiver",
+            placeholder:
+              "Deixe em branco se não tiver",
             required: false,
             max_length: 200
           }]
@@ -975,7 +1225,16 @@ function modalField(i, id) {
 }
 
 function buildEmbed(build) {
-  const data = STATUS[build.status] || STATUS.queued;
+  const data =
+    STATUS[build.status] || STATUS.queued;
+
+  const situation = {
+    queued: "⏳ Na fila",
+    running: "⚙️ Compilando",
+    success: "✅ Concluído",
+    failure: "❌ Falhou",
+    cancelled: "🛑 Trava liberada"
+  };
 
   const fields = [
     {
@@ -985,12 +1244,8 @@ function buildEmbed(build) {
     },
     {
       name: "📊 Situação",
-      value: {
-        queued: "⏳ Na fila",
-        running: "⚙️ Compilando",
-        success: "✅ Concluído",
-        failure: "❌ Falhou"
-      }[build.status],
+      value:
+        situation[build.status] || "⏳ Na fila",
       inline: true
     },
     {
@@ -1004,14 +1259,16 @@ function buildEmbed(build) {
   if (build.download_url) {
     fields.push({
       name: "📦 Seu APK",
-      value: `[Baixar aplicativo](${build.download_url})`
+      value:
+        `[Baixar aplicativo](${build.download_url})`
     });
   }
 
   if (build.error) {
     fields.push({
       name: "⚠️ Detalhes",
-      value: String(build.error).slice(0, 900)
+      value:
+        String(build.error).slice(0, 900)
     });
   }
 
@@ -1058,7 +1315,8 @@ async function startBuild(
   if (await env.TICKETS.get(lockKey)) {
     return reply(
       "⚠️ **COMPILAÇÃO EM ANDAMENTO!**\n" +
-      "Aguarde a finalização da solicitação atual.",
+      "Aguarde a finalização ou utilize `/parar-build` " +
+      "para liberar uma trava antiga.",
       true
     );
   }
@@ -1100,8 +1358,8 @@ async function startBuild(
     );
 
     // Integração interna de compilação.
-    // Nenhuma informação da infraestrutura
-    // é exibida aos membros do Discord.
+    // A infraestrutura não é divulgada
+    // nas mensagens aos usuários.
 
     const endpoint =
       `https://api.github.com/repos/` +
@@ -1111,11 +1369,16 @@ async function startBuild(
     const response = await fetch(endpoint, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-        Accept: "application/vnd.github+json",
-        "Content-Type": "application/json",
-        "User-Agent": "Aurora-Build-Engine",
-        "X-GitHub-Api-Version": "2022-11-28"
+        Authorization:
+          `Bearer ${env.GITHUB_TOKEN}`,
+        Accept:
+          "application/vnd.github+json",
+        "Content-Type":
+          "application/json",
+        "User-Agent":
+          "Aurora-Build-Engine",
+        "X-GitHub-Api-Version":
+          "2022-11-28"
       },
       body: JSON.stringify({
         ref: env.GITHUB_REF || "main",
@@ -1131,7 +1394,8 @@ async function startBuild(
 
     if (!response.ok) {
       throw new Error(
-        `Serviço de compilação indisponível (${response.status})`
+        "Serviço de compilação indisponível " +
+        `(${response.status})`
       );
     }
 
@@ -1160,7 +1424,8 @@ async function startBuild(
       try {
         await discord(
           env,
-          `/channels/${i.channel_id}/messages/${build.message_id}`,
+          `/channels/${i.channel_id}/messages/` +
+          build.message_id,
           {
             method: "PATCH",
             body: JSON.stringify({
@@ -1182,7 +1447,89 @@ async function startBuild(
 }
 
 // ============================================
-// 📡 RECEBER STATUS DA COMPILAÇÃO
+// 🛑 PARAR BUILD / LIBERAR TRAVA
+// ============================================
+
+async function stopBuild(i, env) {
+  const target =
+    option(i, "usuario") || uid(i);
+
+  if (
+    target !== uid(i) &&
+    !admin(i)
+  ) {
+    return reply(
+      "❌ Apenas administradores podem liberar " +
+      "compilações de outros usuários.",
+      true
+    );
+  }
+
+  const lockKey = `build_lock:${target}`;
+  const buildId = await env.TICKETS.get(lockKey);
+
+  if (!buildId) {
+    return reply(
+      "📊 Nenhuma compilação bloqueada encontrada.",
+      true
+    );
+  }
+
+  const stored = await env.TICKETS.get(
+    `build:${buildId}`
+  );
+
+  if (stored) {
+    const build = JSON.parse(stored);
+
+    build.status = "cancelled";
+    build.error =
+      "Trava liberada manualmente. " +
+      "A execução remota pode continuar.";
+
+    await env.TICKETS.put(
+      `build:${buildId}`,
+      JSON.stringify(build),
+      { expirationTtl: 86400 }
+    );
+
+    if (build.message_id) {
+      try {
+        await discord(
+          env,
+          `/channels/${build.channel_id}/messages/` +
+          build.message_id,
+          {
+            method: "PATCH",
+            body: JSON.stringify({
+              embeds: [buildEmbed(build)],
+              allowed_mentions: { parse: [] }
+            })
+          }
+        );
+      } catch (error) {
+        console.error(
+          "Atualização do build:",
+          error
+        );
+      }
+    }
+  }
+
+  await env.TICKETS.delete(lockKey);
+
+  return reply(
+    "🔓 **AURORA BUILD ENGINE**\n\n" +
+    "✅ Trava de compilação liberada!\n" +
+    "🚀 Você pode solicitar outro build.\n\n" +
+    "⚠️ A execução remota pode continuar " +
+    "em segundo plano.",
+    true
+  );
+}
+
+// ============================================
+// 📡 CALLBACK DA COMPILAÇÃO
 // ============================================
 
 async function callback(request, env) {
@@ -1238,9 +1585,10 @@ async function callback(request, env) {
   const buildId = await env.TICKETS.get(lockKey);
 
   if (!buildId) {
-    return new Response("Build não encontrado", {
-      status: 404
-    });
+    return new Response(
+      "Build não encontrado ou trava liberada",
+      { status: 404 }
+    );
   }
 
   const stored = await env.TICKETS.get(
@@ -1248,9 +1596,10 @@ async function callback(request, env) {
   );
 
   if (!stored) {
-    return new Response("Registro não encontrado", {
-      status: 404
-    });
+    return new Response(
+      "Registro não encontrado",
+      { status: 404 }
+    );
   }
 
   const build = JSON.parse(stored);
@@ -1264,14 +1613,25 @@ async function callback(request, env) {
     });
   }
 
+  if (build.status === "cancelled") {
+    return new Response(
+      "Compilação liberada manualmente",
+      { status: 409 }
+    );
+  }
+
   build.status = validStatus;
 
-  if (download_url && https(download_url)) {
+  if (
+    download_url &&
+    https(download_url)
+  ) {
     build.download_url = download_url;
   }
 
   if (error) {
-    build.error = String(error).slice(0, 900);
+    build.error =
+      String(error).slice(0, 900);
   }
 
   await env.TICKETS.put(
@@ -1283,7 +1643,8 @@ async function callback(request, env) {
   if (build.message_id) {
     await discord(
       env,
-      `/channels/${channel_id}/messages/${build.message_id}`,
+      `/channels/${channel_id}/messages/` +
+      build.message_id,
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -1301,7 +1662,9 @@ async function callback(request, env) {
     await env.TICKETS.delete(lockKey);
   }
 
-  return new Response("OK", { status: 200 });
+  return new Response("OK", {
+    status: 200
+  });
 }
 
 // ============================================
@@ -1312,12 +1675,28 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    // ========================================
+    // REGISTRO CLOUD
+    // ========================================
+
+    if (url.pathname === "/admin/register") {
+      return registerRoute(request, env);
+    }
+
+    // ========================================
+    // CALLBACK DE COMPILAÇÃO
+    // ========================================
+
     if (
       url.pathname === "/build-callback" &&
       request.method === "POST"
     ) {
       return callback(request, env);
     }
+
+    // ========================================
+    // DOWNLOAD DE SOURCES
+    // ========================================
 
     if (
       url.pathname === "/download" &&
@@ -1368,6 +1747,46 @@ export default {
     ) {
       const name = i.data.name;
 
+      // 💙 /registrar
+
+      if (name === "registrar") {
+        if (!admin(i)) {
+          return reply(
+            "❌ Apenas administradores podem registrar comandos.",
+            true
+          );
+        }
+
+        try {
+          const commands = await registerCommands(
+            env,
+            i.guild_id
+          );
+
+          return reply(
+            "💙 **AURORA AI | COMANDOS ATUALIZADOS**\n\n" +
+            "✅ Registro concluído com sucesso!\n" +
+            `📦 Comandos registrados: **${commands.length}**\n` +
+            "🚀 Atualizações enviadas ao Discord.",
+            true
+          );
+        } catch (error) {
+          return reply(
+            "❌ **Falha ao registrar comandos.**\n" +
+            String(error.message).slice(0, 450),
+            true
+          );
+        }
+      }
+
+      // 🛑 /parar-build
+
+      if (name === "parar-build") {
+        return stopBuild(i, env);
+      }
+
+      // 🎫 /setup-ticket
+
       if (name === "setup-ticket") {
         if (!admin(i)) {
           return reply(
@@ -1378,6 +1797,8 @@ export default {
 
         return ticketPanel();
       }
+
+      // 🎫 /ticket
 
       if (name === "ticket") {
         ctx.waitUntil(
@@ -1395,17 +1816,40 @@ export default {
         return defer();
       }
 
+      // 🔒 /fechar-ticket
+
       if (name === "fechar-ticket") {
         if (!(await ticketAccess(i, env))) {
-          return reply("❌ Sem permissão.", true);
+          return reply(
+            "❌ Sem permissão.",
+            true
+          );
+        }
+
+        if (
+          await env.TICKETS.get(
+            `build_lock:${uid(i)}`
+          )
+        ) {
+          return reply(
+            "⚠️ Aguarde a compilação terminar " +
+            "ou libere a trava antiga.",
+            true
+          );
         }
 
         ctx.waitUntil(
-          closeTicket(i, env).catch(console.error)
+          closeTicket(i, env)
+            .catch(console.error)
         );
 
-        return reply("🔒 Encerrando ticket.", true);
+        return reply(
+          "🔒 Encerrando ticket.",
+          true
+        );
       }
+
+      // 📦 /importar e /enviar-source
 
       if (
         name === "importar" ||
@@ -1419,15 +1863,23 @@ export default {
         }
 
         ctx.waitUntil(
-          importSource(i, env, option(i, "url"))
+          importSource(
+            i,
+            env,
+            option(i, "url")
+          )
         );
 
         return defer();
       }
 
+      // 🧠 /editar
+
       if (name === "editar") {
         return editMenu(i, env);
       }
+
+      // 📦 /aprovar /rejeitar /baixar
 
       if (
         ["aprovar", "rejeitar", "baixar"].includes(
@@ -1435,7 +1887,10 @@ export default {
         )
       ) {
         if (!(await ticketAccess(i, env))) {
-          return reply("❌ Sem acesso.", true);
+          return reply(
+            "❌ Sem acesso.",
+            true
+          );
         }
 
         return manageVersion(
@@ -1447,16 +1902,24 @@ export default {
         );
       }
 
+      // 📂 /sources /versoes /historico
+
       if (
         ["sources", "versoes", "historico"].includes(
           name
         )
       ) {
         if (!(await ticketAccess(i, env))) {
-          return reply("❌ Sem acesso.", true);
+          return reply(
+            "❌ Sem acesso.",
+            true
+          );
         }
 
-        const sources = await getSources(i, env);
+        const sources = await getSources(
+          i,
+          env
+        );
 
         if (!sources.length) {
           return reply(
@@ -1476,6 +1939,8 @@ export default {
           true
         );
       }
+
+      // 🔨 /compilar
 
       if (name === "compilar") {
         if (!(await ticketAccess(i, env))) {
@@ -1500,33 +1965,20 @@ export default {
         );
       }
 
+      // 🔓 /destravar
+
       if (name === "destravar") {
-        const target =
-          option(i, "usuario") || uid(i);
-
-        if (
-          target !== uid(i) &&
-          !admin(i)
-        ) {
-          return reply(
-            "❌ Apenas administradores podem destravar outros usuários.",
-            true
-          );
-        }
-
-        await env.TICKETS.delete(
-          `build_lock:${target}`
-        );
-
-        return reply(
-          "🔓 **Trava de compilação liberada!**",
-          true
-        );
+        return stopBuild(i, env);
       }
+
+      // 📊 /builds
 
       if (name === "builds") {
         if (!(await ticketAccess(i, env))) {
-          return reply("❌ Sem acesso.", true);
+          return reply(
+            "❌ Sem acesso.",
+            true
+          );
         }
 
         const buildId = await env.TICKETS.get(
@@ -1554,12 +2006,14 @@ export default {
         const build = JSON.parse(stored);
 
         return reply(
-          `🔨 **AURORA BUILD ENGINE**\n\n` +
+          "🔨 **AURORA BUILD ENGINE**\n\n" +
           `📊 Status: **${build.status}**\n` +
           `🆔 Build: \`${build.id}\``,
           true
         );
       }
+
+      // 🛡️ /seguranca
 
       if (name === "seguranca") {
         if (!admin(i)) {
@@ -1575,7 +2029,8 @@ export default {
           "🔒 Tickets com acesso restrito.\n" +
           "📦 Sources separadas por ticket.\n" +
           "🔑 Callback autenticado.\n\n" +
-          "⚠️ Moderação automática de mensagens requer um serviço Gateway adicional.",
+          "⚠️ Moderação automática requer " +
+          "um serviço Gateway adicional.",
           true
         );
       }
@@ -1604,7 +2059,10 @@ export default {
         )
       ) {
         if (!(await ticketAccess(i, env))) {
-          return reply("❌ Sem acesso.", true);
+          return reply(
+            "❌ Sem acesso.",
+            true
+          );
         }
 
         const sourceId = customId.slice(
@@ -1645,6 +2103,8 @@ export default {
     ) {
       const id = i.data.custom_id;
 
+      // 🎫 Abrir ticket
+
       if (id === "aurora_open_ticket") {
         ctx.waitUntil(
           createTicket(i, env)
@@ -1661,9 +2121,14 @@ export default {
         return defer();
       }
 
+      // 🔨 Compilar APK
+
       if (id === "compilar_apk") {
         if (!(await ticketAccess(i, env))) {
-          return reply("❌ Sem acesso.", true);
+          return reply(
+            "❌ Sem acesso.",
+            true
+          );
         }
 
         if (
@@ -1672,7 +2137,8 @@ export default {
           )
         ) {
           return reply(
-            "⚠️ Você já possui uma compilação em andamento.",
+            "⚠️ Você já possui uma compilação em andamento.\n" +
+            "Use `/parar-build` caso a trava esteja presa.",
             true
           );
         }
@@ -1680,20 +2146,32 @@ export default {
         return buildModal();
       }
 
+      // 🧠 Editar com IA
+
       if (id === "aurora_edit_button") {
         return editMenu(i, env);
       }
+
+      // 📂 Selecionar source
 
       if (id === "aurora_edit_select") {
         return editSelection(i, env);
       }
 
+      // 📦 Minhas Sources
+
       if (id === "aurora_sources_button") {
         if (!(await ticketAccess(i, env))) {
-          return reply("❌ Sem acesso.", true);
+          return reply(
+            "❌ Sem acesso.",
+            true
+          );
         }
 
-        const sources = await getSources(i, env);
+        const sources = await getSources(
+          i,
+          env
+        );
 
         return reply(
           sources.length
@@ -1703,14 +2181,20 @@ export default {
                   `📦 ${x.id.slice(0, 8)} | ` +
                   `${x.status} | ${x.summary}`
               ).join("\n").slice(0, 1900)
-            : "📂 Nenhuma source cadastrada.\nUse `/importar`.",
+            : "📂 Nenhuma source cadastrada.\n" +
+              "Use `/importar`.",
           true
         );
       }
 
+      // 🔒 Fechar ticket
+
       if (id === "aurora_close_ticket") {
         if (!(await ticketAccess(i, env))) {
-          return reply("❌ Sem acesso.", true);
+          return reply(
+            "❌ Sem acesso.",
+            true
+          );
         }
 
         if (
@@ -1719,13 +2203,15 @@ export default {
           )
         ) {
           return reply(
-            "⚠️ Aguarde sua compilação terminar.",
+            "⚠️ Aguarde sua compilação terminar " +
+            "ou libere a trava antiga.",
             true
           );
         }
 
         ctx.waitUntil(
-          closeTicket(i, env).catch(console.error)
+          closeTicket(i, env)
+            .catch(console.error)
         );
 
         return reply(

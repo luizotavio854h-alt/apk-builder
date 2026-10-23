@@ -4,6 +4,7 @@ const API='https://discord.com/api/v10';
 const reply=(content,ephemeral=false)=>Response.json({type:InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,data:{content,flags:ephemeral?64:0,allowed_mentions:{parse:[]}}});
 const defer=()=>Response.json({type:InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,data:{flags:64}});
 const opt=(i,name)=>i.data.options?.find(o=>o.name===name)?.value;
+const str=(name,description,required=true)=>({name,description,type:3,required});
 const uid=i=>i.member?.user?.id||i.user?.id;
 const admin=i=>(BigInt(i.member?.permissions||'0')&8n)!==0n;
 const isHttps=s=>{try{const u=new URL(s);return u.protocol==='https:'&&!['localhost','127.0.0.1','0.0.0.0','::1'].includes(u.hostname)&&!u.hostname.endsWith('.local')}catch{return false}};

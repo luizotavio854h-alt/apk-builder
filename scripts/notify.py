@@ -39,12 +39,22 @@ else:
 request = urllib.request.Request(
     worker + '/build-callback',
     data=json.dumps(payload).encode('utf-8'),
-    headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + secret},
+    headers={
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'AuroraAndroidEngine/4.0 (+GitHub-Actions)',
+        'Authorization': 'Bearer ' + secret,
+    },
     method='POST',
 )
 try:
     with urllib.request.urlopen(request, timeout=30) as response:
         print('Aurora Worker callback:', response.status)
 except urllib.error.HTTPError as e:
-    print('Aurora Worker callback failed:', e.code, e.read(500).decode('utf-8', 'replace'), file=sys.stderr)
-    raise
+    body = e.read(1000).decode('utf-8', 'replace')
+    print('Aurora Worker callback failed:', e.code, body, file=sys.stderr)
+    if e.code == 403 and ('1010' in body or 'error code: 1010' in body.lower()):
+        print('Cloudflare security blocked the GitHub Actions HTTP client (1010).', file=sys.stderr)
+        print('Check Cloudflare Security Events for the blocked request and configure a narrowly scoped exception for /build-callback if appropriate.', file=sys.stderr)
+        print('Do not disable global security or expose CALLBACK_SECRET.', file=sys.stderr)
+    raise SystemExit(1)

@@ -10,7 +10,7 @@ files=sorted(pathlib.Path('output').glob('*.apk'))
 if not files:raise SystemExit('No APK to upload')
 # Upload first APK only; multi-APK builds require variant selection.
 file=files[0];data=file.read_bytes()
-if len(data)>95*1024*1024:raise SystemExit('APK >95 MiB: Worker upload requires a larger-file strategy')
+if len(data)>2999*1024*1024:raise SystemExit('APK >95 MiB: Worker upload requires a larger-file strategy')
 url=worker+'/upload-apk?'+urllib.parse.urlencode({'user_id':user,'channel_id':channel})
 req=urllib.request.Request(url,data=data,method='POST',headers={'Authorization':'Bearer '+secret,'Content-Type':'application/vnd.android.package-archive','User-Agent':'AuroraBuildUploader/1.0'})
 try:

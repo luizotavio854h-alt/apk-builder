@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       zip_password:
-        description: 'ZIP password (optional; prefer a private source URL)'
+        description: 'ZIP password (optional)'
         required: false
         type: string
       channel_id:
@@ -17,11 +17,11 @@ on:
         type: string
       user_id:
         description: 'Discord user ID'
-        required: false
+        required: true
         type: string
       worker_url:
         description: 'Cloudflare Worker base URL'
-        required: false
+        required: true
         type: string
 
 permissions:
@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   build:
-    name: Compile Android source (isolated from secrets)
+    name: Compile Android source
     runs-on: ubuntu-latest
     timeout-minutes: 55
     permissions:
@@ -70,7 +70,6 @@ jobs:
           CMAKE: ${{ env.CMAKE_VERSION }}
         run: |
           set -euo pipefail
-          # Android Gradle Plugin resolves build-tools automatically.
           packages=("platform-tools" "platforms;android-${SDK}")
           if [[ -n "$NDK" ]]; then packages+=("ndk;${NDK}"); fi
           if [[ -n "$CMAKE" ]]; then packages+=("cmake;${CMAKE}"); fi
@@ -89,7 +88,7 @@ jobs:
             chmod +x ./gradlew
             ./gradlew --no-daemon --stacktrace assembleDebug 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           else
-            echo 'gradlew missing. Falling back to runner Gradle; compatibility depends on project.'
+            echo 'gradlew missing. Using runner Gradle; compatibility depends on project.'
             gradle --no-daemon --stacktrace assembleDebug 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           fi
 
@@ -120,12 +119,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Aurora-Build-Logs
-          path: build.log
+          path: |
+            build.log
+            workspace/download-debug.txt
           if-no-files-found: ignore
           retention-days: 7
 
   notify:
-    name: Notify Discord and release Worker lock
+    name: Notify Worker and release build lock
     needs: [build]
     if: always()
     runs-on: ubuntu-latest
@@ -133,7 +134,6 @@ jobs:
     permissions:
       contents: read
     env:
-      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
       CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
       CHANNEL_ID: ${{ inputs.channel_id }}
       USER_ID: ${{ inputs.user_id }}
@@ -146,5 +146,5 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Send completion message and callback
+      - name: Send completion callback
         run: python3 scripts/notify.py

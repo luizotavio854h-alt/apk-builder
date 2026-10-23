@@ -1,21 +1,34 @@
+
 name = "apk-builder"
 main = "src/index.js"
-compatibility_date = "2023-10-30"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
 
+# CONFIGURAÇÕES GERAIS
 [vars]
 GITHUB_USER = "luizotavio854h-alt"
 GITHUB_REPO = "apk-builder"
+GITHUB_REF = "main"
 
-# 🧠 KV (locks, tickets, etc)
+# INTELIGÊNCIA ARTIFICIAL
+OPENAI_MODEL = "gpt-4.1-mini"
+
+# TICKETS
+TICKET_CATEGORY_ID = "1510734520553308160"
+
+# SEGURANÇA
+SECURITY_MODE = "delete"
+
+# KV - Tickets e travas de compilação
 [[kv_namespaces]]
 binding = "TICKETS"
 id = "3ed7420df8334d56a8f079c4d6592726"
 
-# 📦 R2 STORAGE (ZIPs do projeto editado pela IA)
-r2_buckets = [
-  { binding = "STORAGE", bucket_name = "ai-apk-builder" }
-]
+# R2 - Armazenamento das sources ZIP
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "ai-apk-builder"
 
-# ⏰ cron job (limpeza de tickets)
+# Limpeza automática de tickets
 [triggers]
 crons = ["0 * * * *"]

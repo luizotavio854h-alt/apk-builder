@@ -14,7 +14,7 @@ O Worker usa o namespace KV `TICKETS`. Configure os secrets e variáveis descrit
 
 ## Envio e compilacao
 
-Dentro de um ticket, use `/enviar-zip` para abrir o portal privado de upload. O portal recebe ZIPs de até 12 MB e salva o arquivo no GoFile sem depender de um link externo acessível ao Worker. Também é possível usar `/importar` com um link público direto.
+Dentro de um ticket, use `/enviar-zip` para abrir o portal privado de upload. O navegador envia o ZIP diretamente ao GoFile, com limite de 20 GB, sem passar o arquivo pelo Worker. `/importar` por link público e a leitura do ZIP pela Aurora AI continuam limitados a 12 MB, pois essas rotas ainda processam o arquivo no Worker.
 
 Use `/editar` para pedir alterações pela Aurora AI e `/compilar` para gerar o APK. O workflow `.github/workflows/engine.yml` acompanha a build, envia o APK ao GoFile Guest e atualiza a mensagem do ticket.
 

@@ -2,7 +2,7 @@
 
 ## Armazenamento de arquivos
 
-APKs, ZIPs importados e projetos editados pela Aurora AI são armazenados no GoFile Guest. O KV `TICKETS` guarda apenas metadados e credenciais Guest para reabrir os arquivos. O portal `/upload` aceita arquivos ZIP de até 12 MB e associa cada envio ao ticket que criou o link.
+APKs, ZIPs importados e projetos editados pela Aurora AI são armazenados no GoFile Guest. O KV `TICKETS` guarda apenas metadados e credenciais Guest para reabrir os arquivos. O portal `/upload` envia ZIPs diretamente do navegador ao GoFile, aceita até 20 GB e associa cada envio ao ticket que criou o link. `/importar` por URL e a leitura para edição com IA seguem limitados a 12 MB porque o Worker baixa e processa esses ZIPs.
 
 ## Cloudflare Worker
 

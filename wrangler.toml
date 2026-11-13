@@ -14,9 +14,5 @@ TICKET_CATEGORY_ID = "1510734520553308160"
 binding = "TICKETS"
 id = "3ed7420df8334d56a8f079c4d6592726"
 
-[[r2_buckets]]
-binding = "STORAGE"
-bucket_name = "ai-apk-builder"
-
 [triggers]
 crons = ["0 * * * *"]

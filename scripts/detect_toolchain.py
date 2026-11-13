@@ -16,4 +16,6 @@ wrapper=root/'gradle/wrapper/gradle-wrapper.properties'
 if wrapper.exists() and re.search(r'gradle-9\.',wrapper.read_text(errors='ignore')): java='21'
 with open(os.environ['GITHUB_ENV'],'a') as f:
  for k,v in [('COMPILE_SDK',sdk),('NDK_VERSION',ndk),('CMAKE_VERSION',cmake),('JAVA_VERSION',java)]:f.write(f'{k}={v}\n')
+with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+ for k,v in [('compile_sdk',sdk),('ndk_version',ndk),('cmake_version',cmake),('java_version',java)]:f.write(f'{k}={v}\n')
 print(json.dumps({'compileSdk':sdk,'ndkVersion':ndk,'cmakeVersion':cmake,'java':java},indent=2))

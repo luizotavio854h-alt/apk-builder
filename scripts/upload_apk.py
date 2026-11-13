@@ -1,25 +1,54 @@
 #!/usr/bin/env python3
-"""Send built APK to Cloudflare Worker; never expose R2 credentials to build scripts."""
-import json,os,pathlib,urllib.parse,urllib.request,urllib.error,sys
-worker=os.environ.get('WORKER_URL','').rstrip('/')
-secret=os.environ.get('CALLBACK_SECRET','')
-user=os.environ.get('USER_ID','')
-channel=os.environ.get('CHANNEL_ID','')
-if not all([worker,secret,user,channel]):raise SystemExit('Missing WORKER_URL, CALLBACK_SECRET, USER_ID or CHANNEL_ID')
-files=sorted(pathlib.Path('output').glob('*.apk'))
-if not files:raise SystemExit('No APK to upload')
-# Upload first APK only; multi-APK builds require variant selection.
-file=files[0];data=file.read_bytes()
-if len(data)>2999*1024*1024:raise SystemExit('APK >95 MiB: Worker upload requires a larger-file strategy')
-url=worker+'/upload-apk?'+urllib.parse.urlencode({'user_id':user,'channel_id':channel})
-req=urllib.request.Request(url,data=data,method='POST',headers={'Authorization':'Bearer '+secret,'Content-Type':'application/vnd.android.package-archive','User-Agent':'AuroraBuildUploader/1.0'})
+"""Stream the selected APK to GoFile Guest and persist its public page URL."""
+import json, os, pathlib, sys, urllib.error, urllib.request, uuid
+
+files = sorted(p for p in pathlib.Path('output').glob('*.apk') if p.is_file() and p.stat().st_size)
+if not files:
+    raise SystemExit('Nenhum APK válido encontrado em output/.')
+apk = files[0]  # Preserve current behavior: publish first generated variant.
+boundary = '----Aurora' + uuid.uuid4().hex
+size = apk.stat().st_size
+prefix = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{apk.name}"\r\n'
+          'Content-Type: application/vnd.android.package-archive\r\n\r\n').encode()
+suffix = f'\r\n--{boundary}--\r\n'.encode()
+
+class MultipartFile:
+    """File-like body: urllib reads chunks instead of loading a large APK in RAM."""
+    def __init__(self):
+        self.parts = [memoryview(prefix), open(apk, 'rb'), memoryview(suffix)]
+        self.length = len(prefix) + size + len(suffix)
+    def read(self, n=-1):
+        while self.parts:
+            part = self.parts[0]
+            data = part.read(n) if hasattr(part, 'read') else bytes(part[:n] if n >= 0 else part)
+            if not data:
+                if hasattr(part, 'close'): part.close()
+                self.parts.pop(0); continue
+            if not hasattr(part, 'read') and n >= 0: self.parts[0] = part[len(data):]
+            return data
+        return b''
+
+body = MultipartFile()
+req = urllib.request.Request('https://upload.gofile.io/uploadfile', data=body,
+    headers={'Content-Type': f'multipart/form-data; boundary={boundary}',
+             'Content-Length': str(body.length), 'User-Agent': 'AuroraBuildUploader/2.0'}, method='POST')
 try:
- with urllib.request.urlopen(req,timeout=180) as r:result=json.load(r)
-except urllib.error.HTTPError as e:
- print('Upload failed:',e.code,e.read(500).decode('utf-8','replace'),file=sys.stderr);raise SystemExit(1)
-link=result.get('download_url','')
-if not link.startswith('https://'):raise SystemExit('Worker did not return a download URL')
-with open(os.environ['GITHUB_ENV'],'a') as f:f.write('AURORA_APK_URL='+link+'\n')
-# GITHUB_ENV only applies to the current job; persist for notify job as artifact.
-pathlib.Path('apk_download_url.txt').write_text(link)
-print('APK published to Aurora Worker R2 successfully')
+    with urllib.request.urlopen(req, timeout=900) as response:
+        if response.status not in (200, 201): raise RuntimeError(f'GoFile HTTP {response.status}')
+        result = json.load(response)
+except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(f'Falha ao publicar no GoFile: {getattr(exc, "code", "conexão/timeout")}.') from None
+if result.get('status') != 'ok':
+    raise SystemExit('GoFile não confirmou o upload' + (f': {str(result.get("message", "erro da API"))[:180]}' if result else '.'))
+download_page = result.get('data', {}).get('downloadPage', '')
+try:
+    from urllib.parse import urlparse
+    parsed = urlparse(download_page)
+    if parsed.scheme != 'https' or not parsed.hostname: raise ValueError
+except (TypeError, ValueError):
+    raise SystemExit('GoFile retornou downloadPage inválido; publicação não confirmada.')
+pathlib.Path('apk_download_url.txt').write_text(download_page + '\n', encoding='utf-8')
+env_file = os.environ.get('GITHUB_ENV')
+if env_file:
+    with open(env_file, 'a', encoding='utf-8') as env: env.write('AURORA_APK_URL=' + download_page + '\n')
+print(f'APK enviado e confirmado pelo GoFile Guest ({size} bytes).')

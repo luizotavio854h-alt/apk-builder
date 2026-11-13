@@ -14,6 +14,29 @@ async function makeTicket(i,env){const guild=i.guild_id,user=uid(i),cat=env.TICK
 const staff=env.STAFF_ROLE_ID;const overwrites=[{id:guild,type:0,deny:'1024'},{id:user,type:1,allow:'3072'}];if(staff)overwrites.push({id:staff,type:0,allow:'3072'});
 const ch=await discord(env,`/guilds/${guild}/channels`,{method:'POST',body:JSON.stringify({name:`aurora-${user.slice(-6)}`,type:0,parent_id:cat,permission_overwrites:overwrites})});await env.TICKETS.put(key,ch.id);await env.TICKETS.put(`owner:${ch.id}`,user);
 await discord(env,`/channels/${ch.id}/messages`,{method:'POST',body:JSON.stringify({content:`Bem-vindo <@${user}>! Use /editar para modificar um ZIP, /sources para consultar suas versões ou /compilar para compilar.`,components:[{type:1,components:[{type:2,style:1,label:'Compilar APK',custom_id:'compilar_apk'},{type:2,style:2,label:'Editar com IA',custom_id:'aurora_edit_button'},{type:2,style:2,label:'Minhas Sources',custom_id:'aurora_sources_button'},{type:2,style:4,label:'Fechar Ticket',custom_id:'aurora_close_ticket'}]}],allowed_mentions:{parse:[]}})});return `Ticket criado: <#${ch.id}>`}
+async function createSupportTicket(i,env,category){
+ const guild=i.guild_id,user=uid(i),kind=category==='buy'?'compras':'suporte';
+ if(!guild||!env.SUPPORT_CATEGORY_ID)throw Error('Configure SUPPORT_CATEGORY_ID no Worker.');
+ const key=`support-ticket:${guild}:${user}`,existing=await env.TICKETS.get(key);
+ if(existing){try{await discord(env,`/channels/${existing}`);return `Você já possui atendimento aberto: <#${existing}>`;}catch{await env.TICKETS.delete(key)}}
+ const overwrites=[{id:guild,type:0,deny:'1024'},{id:user,type:1,allow:'3072'}];if(env.STAFF_ROLE_ID)overwrites.push({id:env.STAFF_ROLE_ID,type:0,allow:'3072'});
+ const ch=await discord(env,`/guilds/${guild}/channels`,{method:'POST',body:JSON.stringify({name:`${kind}-${user.slice(-6)}`,type:0,parent_id:env.SUPPORT_CATEGORY_ID,permission_overwrites:overwrites})});
+ const opened=Date.now(),info={guild_id:guild,owner_id:user,category,opened_at:opened,channel_id:ch.id};await env.TICKETS.put(key,ch.id);await env.TICKETS.put(`support:${ch.id}`,JSON.stringify(info));
+ await discord(env,`/channels/${ch.id}/messages`,{method:'POST',body:JSON.stringify({content:`🎫 **Atendimento Aurora — ${category==='buy'?'🛒 Comprar Aplicativos':'🛠️ Suporte Técnico'}**\nOlá <@${user}>! Nossa equipe atenderá você por aqui.\n🔒 Aberto em <t:${Math.floor(opened/1000)}:F>.`,components:[{type:1,components:[{type:2,style:4,label:'🔒 Fechar atendimento',custom_id:'support:close'}]}],allowed_mentions:{parse:[]}})});
+ return `Atendimento criado: <#${ch.id}>`;
+}
+async function closeSupportTicket(env,channelId){
+ const raw=await env.TICKETS.get(`support:${channelId}`);if(!raw)throw Error('Atendimento não encontrado.');const info=JSON.parse(raw);info.closed_at=Date.now();
+ const messages=await discord(env,`/channels/${channelId}/messages?limit=100`),transcript=messages.reverse().map(m=>`[${m.timestamp}] ${m.author?.username||'?'}: ${String(m.content||'').replace(/\s+/g,' ')}`).join('\n').slice(0,17000);
+ if(env.SUPPORT_LOG_CHANNEL_ID)await discord(env,`/channels/${env.SUPPORT_LOG_CHANNEL_ID}/messages`,{method:'POST',body:JSON.stringify({content:`🔒 Ticket encerrado • <@${info.owner_id}> • ${info.category} • Aberto <t:${Math.floor(info.opened_at/1000)}:F> • Fechado <t:${Math.floor(info.closed_at/1000)}:F>\n\`\`\`\n${transcript.slice(-1500)}\n\`\`\``,allowed_mentions:{parse:[]}})});
+ await env.TICKETS.delete(`support-ticket:${info.guild_id}:${info.owner_id}`);await env.TICKETS.delete(`support:${channelId}`);await discord(env,`/channels/${channelId}`,{method:'DELETE'});
+}
+async function publishSupportPanel(i,env){
+ if(!admin(i))return reply('Somente administradores podem publicar o painel.',true);
+ const channel=env.SUPPORT_PANEL_CHANNEL_ID;if(!/^\d{15,25}$/.test(channel||''))return reply('Configure SUPPORT_PANEL_CHANNEL_ID no Worker.',true);
+ await discord(env,`/channels/${channel}/messages`,{method:'POST',body:JSON.stringify({embeds:[{title:'🌌 Atendimento Aurora',description:'Escolha uma das duas opções para abrir um atendimento privado.',color:5814783}],components:[{type:1,components:[{type:2,style:1,label:'🛒 Comprar Aplicativos',custom_id:'support:buy'},{type:2,style:2,label:'🛠️ Suporte Técnico',custom_id:'support:tech'}]}]})});
+ return reply('🎫 Painel de atendimento publicado.',true);
+}
 async function fetchZip(url){
  if(!isHttps(url))throw Error('Informe um link HTTPS válido.');
  const limit=12*1024*1024;
@@ -26,8 +49,16 @@ async function fetchZip(url){
   if(length>limit)throw Error('ZIP acima de 12 MB para importação via Worker.');
   const type=r.headers.get('content-type')||'';
   if(type.includes('text/html')){
-   if(!/mediafire\.com$/i.test(new URL(r.url).hostname)&&!/\.mediafire\.com$/i.test(new URL(r.url).hostname))throw Error('O link devolveu uma página HTML, não um ZIP. Use link direto de download.');
    const html=await r.text();
+   const finalHost=new URL(r.url).hostname.toLowerCase();
+   if(finalHost==='gofile.io'||finalHost==='www.gofile.io'){
+    const normalized=html.replaceAll('\\u0026','&').replaceAll('\\/','/').replaceAll('&amp;','&');
+    const urls=[...normalized.matchAll(/https?:\/\/[a-z0-9-]+\.gofile\.io\/download\/web\/[a-z0-9-]+\/[^\s"'<>\\]+/gi)].map(m=>m[0]);
+    const direct=urls.find(candidate=>{try{const u=new URL(candidate);return u.protocol==='https:'&&/^[a-z0-9-]+\.gofile\.io$/i.test(u.hostname)&&u.pathname.includes('/download/web/')}catch{return false}});
+    if(!direct)throw Error('Não consegui resolver o link público do GoFile. Envie o link direto do arquivo (não apenas a página da pasta).');
+    return get(direct,depth+1);
+   }
+   if(!/(^|\.)mediafire\.com$/i.test(finalHost))throw Error('O link devolveu uma página HTML, não um ZIP. Use link direto do GoFile ou do download.');
    const candidates=[...html.matchAll(/(?:href|data-href)=["'](https:\/\/[^"']+)["']/gi)].map(m=>m[1].replace(/&amp;/g,'&'));
    const direct=candidates.find(u=>{try{const h=new URL(u).hostname;return /(^|\.)mediafire\.com$/i.test(h)&&/\/download|\/file\//i.test(u)&&u!==r.url}catch{return false}});
    if(!direct)throw Error('MediaFire não forneceu um link direto acessível. Abra o MediaFire e copie o link real do botão Download.');
@@ -61,12 +92,52 @@ async function aiEdit(buf,instruction,env){
  if(!changes.length)throw Error(`IA não propôs alterações: ${String(answer.summary||'').slice(0,200)}`);
  return {data:await zip.generateAsync({type:'arraybuffer',compression:'DEFLATE'}),summary:String(answer.summary||'Alterações propostas').slice(0,650),count:changes.length}
 }
-async function signDownload(env,path,expires){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(env.DOWNLOAD_SECRET),'HMAC',{hash:'SHA-256'},false,['sign']);const mac=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(`${path}:${expires}`));return Array.from(new Uint8Array(mac)).map(x=>x.toString(16).padStart(2,'0')).join('')}
-async function download(request,env){if(!env.DOWNLOAD_SECRET)return new Response('Download indisponível',{status:503});const u=new URL(request.url),path=u.searchParams.get('key')||'',exp=Number(u.searchParams.get('exp')),sig=u.searchParams.get('sig')||'';if(!path.startsWith('projects/')||!Number.isFinite(exp)||exp<Date.now()||exp>Date.now()+900000||!/^[a-f0-9]{64}$/.test(sig))return new Response('Link inválido ou expirado',{status:403});const expected=await signDownload(env,path,exp);if(expected!==sig)return new Response('Assinatura inválida',{status:403});const object=await env.STORAGE.get(path);if(!object)return new Response('Arquivo não encontrado',{status:404});return new Response(object.body,{headers:{'Content-Type':'application/zip','Content-Disposition':'attachment; filename="aurora-source.zip"','Cache-Control':'private, no-store'}})}
-async function makeLink(env,request,key){if(!env.DOWNLOAD_SECRET)throw Error('Configure DOWNLOAD_SECRET no Cloudflare.');const exp=Date.now()+10*60*1000;const sig=await signDownload(env,key,exp);return `${new URL(request.url).origin}/download?key=${encodeURIComponent(key)}&exp=${exp}&sig=${sig}`}
-async function importSource(i,env,url){const owner=await env.TICKETS.get(`owner:${i.channel_id}`)||uid(i);const original=await fetchZip(url);const id=crypto.randomUUID(),prefix=`projects/${i.guild_id}/${i.channel_id}/${owner}/${id}`;await env.STORAGE.put(`${prefix}-original.zip`,original);const k=`sources:${i.channel_id}:${owner}`,items=JSON.parse(await env.TICKETS.get(k)||'[]');items.unshift({id,prefix,summary:'Source importada',status:'approved',created:new Date().toISOString()});await env.TICKETS.put(k,JSON.stringify(items.slice(0,30)));await editReply(i,{content:`📦 Source registrada! ID: \`${id}\`\nUse /editar com esse ID para propor alterações.`})}
-async function manageVersion(i,env,action,id,request){const owner=uid(i),key=`sources:${i.channel_id}:${owner}`,items=JSON.parse(await env.TICKETS.get(key)||'[]'),item=items.find(x=>x.id===id);if(!item)return reply('Versão não encontrada no seu ticket.',true);if(action==='baixar'){const fileKey=`${item.prefix}-${item.summary==='Source importada'||item.status==='rejected'?'original':'edited'}.zip`;const found=await env.STORAGE.head(fileKey);if(!found)return reply('Arquivo indisponível.',true);return reply(`📦 [Baixar ZIP (link válido por 10 minutos)](${await makeLink(env,request,fileKey)})`,true)}if(item.status!=='pending')return reply('Essa versão já foi avaliada.',true);item.status=action==='aprovar'?'approved':'rejected';await env.TICKETS.put(key,JSON.stringify(items));return reply(item.status==='approved'?'✅ Alteração aprovada. A source original continua preservada.':'❌ Alteração rejeitada. A source original continua preservada.',true)}
-// Menu de seleção por ticket: cada source é isolada pelo ID do canal e proprietário.
+const GOFILE_UPLOAD_URL='https://upload.gofile.io/uploadfile';
+function validGofileUrl(value){try{const u=new URL(value);return u.protocol==='https:'&&/(^|\.)gofile\.io$/i.test(u.hostname)}catch{return false}}
+async function uploadGofile(bytes,filename,contentType='application/zip'){
+ const form=new FormData();form.append('file',new Blob([bytes],{type:contentType}),filename);
+ let response,data;try{response=await fetch(GOFILE_UPLOAD_URL,{method:'POST',body:form,signal:AbortSignal.timeout(180000)});data=await response.json()}catch(e){throw Error(`Upload GoFile falhou por conexão ou resposta inválida (${e.name||'erro'}).`)}
+ if(!response.ok||data?.status!=='ok')throw Error(`GoFile recusou o upload (${response.status}, ${String(data?.status||'resposta inválida').slice(0,80)}).`);
+ const d=data.data||{},downloadPage=d.downloadPage||'',id=d.id||'',server=d.serverSelected||d.servers?.[0]||'',fileName=d.name||filename;
+ let directUrl=d.link||'';if(!directUrl&&/^[a-z0-9-]{8,80}$/i.test(id)&&/^[a-z0-9-]+$/i.test(server))directUrl=`https://${server}.gofile.io/download/web/${id}/${encodeURIComponent(fileName)}`;
+ if(!validGofileUrl(downloadPage)||!validGofileUrl(directUrl))throw Error('GoFile confirmou o envio, mas não retornou dados públicos de download válidos.');
+ const guestToken=d.guestToken||d.token||'';if(typeof guestToken!=='string'||!/^[-A-Za-z0-9._~]{12,4096}$/.test(guestToken))throw Error('GoFile não retornou uma credencial Guest válida para reabrir o ZIP pela IA.');
+ return {downloadPage,directUrl,fileId:id,guestToken,name:fileName,size:Number(d.size)||bytes.byteLength};
+}
+async function readGofileZip(file){
+ if(!file?.guestToken||!validGofileUrl(file.directUrl))throw Error('Arquivo GoFile sem metadados Guest válidos.');
+ let current=new URL(file.directUrl),response;
+ for(let hop=0;hop<4;hop++){
+  if(!validGofileUrl(current.href))throw Error('GoFile redirecionou para um host não autorizado.');
+  response=await fetch(current,{redirect:'manual',headers:{Cookie:`accountToken=${file.guestToken}`,'User-Agent':'AuroraImporter/3.0','Accept':'application/zip,application/octet-stream,*/*'},signal:AbortSignal.timeout(60000)});
+  if(response.status>=300&&response.status<400){const location=response.headers.get('location');if(!location)throw Error('GoFile retornou redirecionamento sem destino.');current=new URL(location,current);continue;}
+  break;
+ }
+ if(!response?.ok)throw Error(`Falha ao baixar ZIP do GoFile (HTTP ${response?.status||'desconhecido'}).`);
+ if(!validGofileUrl(response.url))throw Error('O download do GoFile terminou fora de um host GoFile.');
+ const length=Number(response.headers.get('content-length')||0);if(length>12*1024*1024)throw Error('ZIP do GoFile excede o limite de edição de 12 MB.');
+ const bytes=await response.arrayBuffer();if(bytes.byteLength>12*1024*1024)throw Error('ZIP do GoFile excede o limite de edição de 12 MB.');
+ const signature=new Uint8Array(bytes);if(signature.length<4||signature[0]!==80||signature[1]!==75)throw Error('GoFile não retornou um arquivo ZIP válido.');
+ return bytes;
+}
+async function importSource(i,env,url){
+ const owner=await env.TICKETS.get(`owner:${i.channel_id}`)||uid(i),original=await fetchZip(url),id=crypto.randomUUID();
+ const stored=await uploadGofile(original,`aurora-source-${id}.zip`),key=`sources:${i.channel_id}:${owner}`,items=JSON.parse(await env.TICKETS.get(key)||'[]');
+ items.unshift({id,original_file:stored,summary:'Source importada',status:'approved',created:new Date().toISOString()});
+ await env.TICKETS.put(key,JSON.stringify(items.slice(0,30)));
+ await editReply(i,{content:'📦 Source salva no GoFile! ID: `'+id+'`\nUse /editar com esse ID para propor alterações.'});
+}async function manageVersion(i,env,action,id,request){
+ const owner=uid(i),key=`sources:${i.channel_id}:${owner}`,items=JSON.parse(await env.TICKETS.get(key)||'[]'),item=items.find(x=>x.id===id);
+ if(!item)return reply('Versão não encontrada no seu ticket.',true);
+ if(action==='baixar'){
+  const file=item.summary==='Source importada'||item.status==='rejected'?item.original_file:(item.edited_file||item.original_file);
+  if(!file||!validGofileUrl(file.downloadPage))return reply('Arquivo GoFile indisponível.',true);
+  return reply('📦 [Baixar ZIP no GoFile]('+file.downloadPage+')',true);
+ }
+ if(item.status!=='pending')return reply('Essa versão já foi avaliada.',true);
+ item.status=action==='aprovar'?'approved':'rejected';await env.TICKETS.put(key,JSON.stringify(items));
+ return reply(item.status==='approved'?'✅ Alteração aprovada. A source original continua preservada no GoFile.':'❌ Alteração rejeitada. A source original continua preservada no GoFile.',true);
+}// Menu de seleção por ticket: cada source é isolada pelo ID do canal e proprietário.
 async function editSourceMenu(i,env){
  const owner=await env.TICKETS.get(`owner:${i.channel_id}`);
  if(!owner)return reply('Use /editar dentro de um ticket.',true);
@@ -95,108 +166,63 @@ async function editModal(i,env,ctx){
 }
 async function editTask(i,env,url,instruction,sourceId){try{
  const owner=uid(i),key=`sources:${i.channel_id}:${owner}`,items=JSON.parse(await env.TICKETS.get(key)||'[]');
- let original,source;
- if(sourceId){source=items.find(x=>x.id===sourceId);if(!source)throw Error('ID da source não encontrado neste ticket.');const obj=await env.STORAGE.get(`${source.prefix}-${source.status==='approved'&&await env.STORAGE.head(`${source.prefix}-edited.zip`)?'edited':'original'}.zip`);if(!obj)throw Error('ZIP armazenado não encontrado.');original=await obj.arrayBuffer()}
- else if(url)original=await fetchZip(url);else throw Error('Informe source_id ou url.');
- const result=await aiEdit(original,instruction,env),id=crypto.randomUUID(),prefix=`projects/${i.guild_id}/${i.channel_id}/${owner}/${id}`;
- await env.STORAGE.put(`${prefix}-original.zip`,original);await env.STORAGE.put(`${prefix}-edited.zip`,result.data);
- items.unshift({id,prefix,summary:result.summary,status:'pending',created:new Date().toISOString(),parent:sourceId||null});await env.TICKETS.put(key,JSON.stringify(items.slice(0,30)));
- await editReply(i,{content:`🧠 **Aurora AI propôs uma nova versão**\nID: \`${id}\`\nArquivos alterados: **${result.count}**\n${result.summary}\n\nRevise antes de aprovar. Use /aprovar, /rejeitar ou /baixar com esse ID. A source original foi preservada.`})
- }catch(e){console.error('Aurora AI:',e);await editReply(i,{content:`❌ Edição não concluída: ${String(e.message).slice(0,500)}`})}}
-function buildModal(){return Response.json({type:9,data:{title:'Compilar Source Code',custom_id:'modal_compilar',components:[{type:1,components:[{type:4,custom_id:'zip_url_input',label:'Link direto do ZIP (HTTPS)',style:1,placeholder:'https://servidor.com/source.zip',required:true,max_length:1000}]},{type:1,components:[{type:4,custom_id:'zip_password_input',label:'Senha do ZIP (opcional)',style:1,placeholder:'Deixe em branco se não tiver',required:false,max_length:200}]}]}})}
-function modalField(i,id){return i.data.components?.flatMap(row=>row.components||[]).find(c=>c.custom_id===id)?.value||''}
-const BUILD_STATUS={
- queued:{title:'⏳ Aurora Build | Na fila',description:'📥 Solicitação recebida.\n📦 Source registrada.\n⏳ Aguardando início da compilação.',color:0xf1c40f},
- running:{title:'⚙️ Aurora Build | Compilando',description:'✅ Solicitação recebida.\n🔄 Compilação em andamento.\n📱 Preparando o aplicativo Android.',color:0x3498db},
- success:{title:'✅ Aurora Build | Concluído',description:'🎉 Compilação finalizada com sucesso!\n📦 Seu APK está pronto.',color:0x2ecc71},
- failure:{title:'❌ Aurora Build | Falhou',description:'⚠️ Não foi possível concluir a compilação.\n📋 Consulte os detalhes do erro.',color:0xe74c3c},
- cancelled:{title:'🛑 Aurora Build | Trava liberada',description:'🔓 Bloqueio removido manualmente.\n⚠️ A execução remota pode continuar.',color:0x95a5a6}
-};
-function buildEmbed(build){
- const x=BUILD_STATUS[build.status]||BUILD_STATUS.queued;
- const fields=[{name:'👤 Solicitante',value:`<@${build.user_id}>`,inline:true},{name:'📊 Situação',value:{queued:'⏳ Na fila',running:'⚙️ Compilando',success:'✅ Concluído',failure:'❌ Falhou',cancelled:'🛑 Trava liberada'}[build.status],inline:true},{name:'🕒 Solicitação',value:`<t:${Math.floor(build.created_at/1000)}:F>`}];
- if(build.download_url)fields.push({name:'📦 Seu APK',value:`[Baixar aplicativo](${build.download_url})`});
- if(build.error)fields.push({name:'⚠️ Detalhes',value:String(build.error).slice(0,900)});
- return {title:x.title,description:x.description,color:x.color,fields,footer:{text:'💙 Aurora Network • Build Engine'},timestamp:new Date().toISOString()};
-}
-async function updateBuildMessage(env,build){
- if(!build.message_id)return;
- await discord(env,`/channels/${build.channel_id}/messages/${build.message_id}`,{method:'PATCH',body:JSON.stringify({embeds:[buildEmbed(build)],allowed_mentions:{parse:[]}})});
-}
-async function startBuild(i,env,url,password='',workerUrl=''){
- const owner=await env.TICKETS.get(`owner:${i.channel_id}`);
- if(!owner||(owner!==uid(i)&&!admin(i)))return reply('❌ Compile apenas dentro do seu ticket.',true);
- if(!isHttps(url))return reply('❌ Informe uma URL HTTPS válida.',true);
- const user=uid(i),key=`build_lock:${user}`;
- if(await env.TICKETS.get(key))return reply('⚠️ Você já tem uma compilação em andamento.',true);
- const buildId=crypto.randomUUID();
- const build={id:buildId,user_id:user,channel_id:i.channel_id,created_at:Date.now(),status:'queued',message_id:null};
- await env.TICKETS.put(key,buildId,{expirationTtl:3600});
- try{
-  const message=await discord(env,`/channels/${i.channel_id}/messages`,{method:'POST',body:JSON.stringify({embeds:[buildEmbed(build)],allowed_mentions:{parse:[]}})});
-  build.message_id=message.id;
-  await env.TICKETS.put(`build:${buildId}`,JSON.stringify(build),{expirationTtl:86400});
-  const endpoint=`https://api.github.com/repos/${env.GITHUB_USER}/${env.GITHUB_REPO}/actions/workflows/engine.yml/dispatches`;
-  const res=await fetch(endpoint,{method:'POST',headers:{Authorization:`Bearer ${env.GITHUB_TOKEN}`,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':'Aurora-Worker','X-GitHub-Api-Version':'2022-11-28'},body:JSON.stringify({ref:env.GITHUB_REF||'main',inputs:{zip_url:url.trim(),channel_id:i.channel_id,user_id:user,worker_url:workerUrl||env.WORKER_URL||'',zip_password:password.trim()}})});
-  if(!res.ok)throw Error(`Serviço de compilação indisponível (${res.status})`);
-  return reply('🚀 **AURORA BUILD ENGINE**\n\n✅ Solicitação recebida!\n📦 Source registrada com sucesso.\n⏳ Sua compilação está na fila.\n📊 Acompanhe o andamento neste ticket.\n\n💙 **Aurora Network**',true);
- }catch(e){
-  await env.TICKETS.delete(key);
-  build.status='failure';build.error='Não foi possível iniciar a compilação.';
-  await env.TICKETS.put(`build:${buildId}`,JSON.stringify(build),{expirationTtl:86400});
-  try{await updateBuildMessage(env,build)}catch(err){console.error('Build status:',err)}
-  console.error('Build start:',e);
-  return reply('❌ Não foi possível iniciar a compilação. Tente novamente mais tarde.',true);
- }
-}
-async function callback(request,env){
+ let original,source,originalFile;
+ if(sourceId){
+  source=items.find(x=>x.id===sourceId);if(!source)throw Error('ID da source não encontrado neste ticket.');
+  originalFile=source.status==='approved'&&source.edited_file?source.edited_file:source.original_file;
+  if(!originalFile)throw Error('Este projeto antigo não tem um arquivo GoFile associado; importe o ZIP novamente.');
+  original=await readGofileZip(originalFile);
+ }else if(url){
+  original=await fetchZip(url);
+ }else throw Error('Informe source_id ou url.');
+ const result=await aiEdit(original,instruction,env),id=crypto.randomUUID();
+ if(!originalFile)originalFile=await uploadGofile(original,`aurora-source-${id}.zip`);
+ const editedFile=await uploadGofile(result.data,`aurora-edited-${id}.zip`);
+ items.unshift({id,original_file:originalFile,edited_file:editedFile,summary:result.summary,status:'pending',created:new Date().toISOString(),parent:sourceId||null});
+ await env.TICKETS.put(key,JSON.stringify(items.slice(0,30)));
+ await editReply(i,{content:`🧠 **Aurora AI propôs uma nova versão**\nID: \`${id}\`\nArquivos alterados: **${result.count}**\n${result.summary}\n\n📦 Original e resultado salvos no GoFile. Revise antes de aprovar. Use /aprovar, /rejeitar ou /baixar com esse ID.`});
+ }catch(e){console.error('Aurora AI / GoFile:',String(e.message));await editReply(i,{content:`❌ Edição não concluída: ${String(e.message).slice(0,500)}`})}}async function callback(request,env){
  if(!env.CALLBACK_SECRET||request.headers.get('Authorization')!==`Bearer ${env.CALLBACK_SECRET}`)return new Response('Unauthorized',{status:401});
  let p;try{p=await request.json()}catch{return new Response('Bad JSON',{status:400})}
- const {user_id,channel_id,status,download_url,error}=p;
- if(!user_id||!channel_id||!status)return new Response('Missing fields',{status:400});
+ const {user_id,channel_id,status,download_url,error,build_id}=p;
+ if(!user_id||!channel_id||!status||!build_id)return new Response('Missing fields',{status:400});
  const normalized={queued:'queued',running:'running',success:'success',failure:'failure',failed:'failure'}[status];
  if(!normalized)return new Response('Invalid status',{status:400});
- const key=`build_lock:${user_id}`,buildId=await env.TICKETS.get(key);
- if(!buildId)return new Response('Build not found',{status:404});
- const raw=await env.TICKETS.get(`build:${buildId}`);
+ const key=`build_lock:${user_id}`,activeId=await env.TICKETS.get(key),id=build_id;
+ if(!id||(activeId&&id!==activeId))return new Response('Build not found or stale',{status:404});
+ const raw=await env.TICKETS.get(`build:${id}`);
  if(!raw)return new Response('Build record not found',{status:404});
  const build=JSON.parse(raw);
  if(build.channel_id!==channel_id||build.user_id!==user_id)return new Response('Build mismatch',{status:403});
+ if(['success','failure','cancelled'].includes(build.status))return new Response('Build already finished',{status:409});
+ if(normalized==='success'&&(!download_url||!isHttps(download_url)))return new Response('Valid HTTPS download_url required',{status:400});
+ if(normalized==='failure'&&!error)return new Response('Failure description required',{status:400});
  build.status=normalized;
  if(download_url&&isHttps(download_url))build.download_url=download_url;
  if(error)build.error=String(error).slice(0,900);
- await env.TICKETS.put(`build:${buildId}`,JSON.stringify(build),{expirationTtl:86400});
+ await env.TICKETS.put(`build:${id}`,JSON.stringify(build),{expirationTtl:86400});
  try{await updateBuildMessage(env,build)}catch(e){console.error('Build update:',e)}
  if(normalized==='success'||normalized==='failure')await env.TICKETS.delete(key);
  return new Response('OK');
 }
 
-// Download APK hospedado pelo Worker, com arquivo privado no R2.
-async function apkPage(request,env){
- const u=new URL(request.url),key=u.searchParams.get('key')||'',exp=Number(u.searchParams.get('exp')),sig=u.searchParams.get('sig')||'';
- if(!env.DOWNLOAD_SECRET||!key.startsWith('apks/')||!Number.isSafeInteger(exp)||exp<Date.now()||exp>Date.now()+8*86400000||!/^[a-f0-9]{64}$/.test(sig)||await signDownload(env,key,exp)!==sig)return new Response('Link inválido ou expirado',{status:403});
- const obj=await env.STORAGE.head(key);if(!obj)return new Response('APK não encontrado',{status:404});
- if(u.searchParams.get('file')==='1'){
-  const file=await env.STORAGE.get(key);return new Response(file.body,{headers:{'Content-Type':'application/vnd.android.package-archive','Content-Disposition':'attachment; filename="Aurora-Launcher.apk"','Cache-Control':'private, no-store'}});
- }
- const url=new URL(u);url.searchParams.set('file','1');
- const safe=url.toString().replaceAll('&','&amp;').replaceAll('"','&quot;');
- return new Response(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aurora Network | Download APK</title><style>body{margin:0;background:#0b1020;color:#edf3ff;font:16px system-ui;min-height:100vh;display:grid;place-items:center}.card{padding:45px 35px;max-width:440px;background:#151d33;border:1px solid #2a3655;border-radius:20px;text-align:center;box-shadow:0 20px 70px #0005}h1{font-size:28px}p{color:#aab8d6;line-height:1.6}a{display:inline-block;background:#548bff;color:white;padding:15px 27px;border-radius:12px;text-decoration:none;font-weight:700;margin-top:16px}</style></head><body><main class="card"><h1>💙 Aurora Network</h1><h2>Seu APK está pronto!</h2><p>A compilação foi concluída. Clique abaixo para baixar o aplicativo Android diretamente pelo nosso site.</p><a href="${safe}">Baixar APK</a><p>Link privado válido até a data de expiração.</p></main></body></html>`,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
-}
-async function uploadApk(request,env){
+async function progressCallback(request,env){
  if(!env.CALLBACK_SECRET||request.headers.get('Authorization')!==`Bearer ${env.CALLBACK_SECRET}`)return new Response('Unauthorized',{status:401});
- const u=new URL(request.url),user=u.searchParams.get('user_id')||'',channel=u.searchParams.get('channel_id')||'';
- if(!/^\d{15,25}$/.test(user)||!/^\d{15,25}$/.test(channel))return new Response('Invalid ids',{status:400});
- const buildId=await env.TICKETS.get(`build_lock:${user}`);if(!buildId)return new Response('No active build',{status:409});
- const record=await env.TICKETS.get(`build:${buildId}`);if(!record||JSON.parse(record).channel_id!==channel)return new Response('Build mismatch',{status:403});
- const len=Number(request.headers.get('content-length')||0);if(len>95*1024*1024)return new Response('APK acima de 95 MB. Use upload multipart/R2 direto para arquivos maiores.',{status:413});
- const data=await request.arrayBuffer();if(data.byteLength>95*1024*1024)return new Response('APK acima de 95 MB',{status:413});
- const bytes=new Uint8Array(data);if(bytes.length<4||bytes[0]!==80||bytes[1]!==75)return new Response('Invalid APK ZIP header',{status:400});
- const key=`apks/${user}/${buildId}.apk`;
- await env.STORAGE.put(key,data,{httpMetadata:{contentType:'application/vnd.android.package-archive'}});
- const exp=Date.now()+7*86400000,sig=await signDownload(env,key,exp);
- return Response.json({download_url:`${u.origin}/apk?key=${encodeURIComponent(key)}&exp=${exp}&sig=${sig}`});
+ let p;try{p=await request.json()}catch{return new Response('Bad JSON',{status:400})}
+ const {build_id,user_id,channel_id,stage}=p,step=Number(p.step);
+ if(!/^[a-f0-9-]{36}$/i.test(build_id||'')||!/^\d{15,25}$/.test(user_id||'')||!/^\d{15,25}$/.test(channel_id||'')||!Number.isInteger(step)||step<0||step>8||typeof stage!=='string'||stage.length>120)return new Response('Invalid payload',{status:400});
+ if(await env.TICKETS.get(`build_lock:${user_id}`)!==build_id)return new Response('Stale build',{status:409});
+ const raw=await env.TICKETS.get(`build:${build_id}`);if(!raw)return new Response('Build not found',{status:404});
+ const build=JSON.parse(raw);if(build.user_id!==user_id||build.channel_id!==channel_id)return new Response('Build mismatch',{status:403});
+ if(!['queued','running'].includes(build.status))return new Response('Build already finished',{status:409});
+ if(step<=Number(build.step??-1))return new Response('Duplicate or out of order',{status:200});
+ build.status='running';build.step=step;build.stage=stage;
+ let updated=false;for(let attempt=0;attempt<2;attempt++){try{await updateBuildMessage(env,build);updated=true;break}catch(e){if(attempt===1)console.error('Progress message update failed:',String(e.message));else await new Promise(resolve=>setTimeout(resolve,300))}}
+ if(!updated)return new Response('Discord message update temporarily failed',{status:503});
+ await env.TICKETS.put(`build:${build_id}`,JSON.stringify(build),{expirationTtl:86400});
+ return new Response('OK');
 }
+
 // ============================================
 // 💙 REGISTRO DOS COMANDOS VIA CLOUDFLARE
 // ============================================
@@ -204,6 +230,7 @@ const AURORA_COMMANDS = [
 
 {name:'setup-ticket',description:'Publica painel de tickets',default_member_permissions:'8'},
 {name:'ticket',description:'Abre seu ticket privado'},
+{name:'build-ticket',description:'Abre seu ticket de compilação Android'},
 {name:'fechar-ticket',description:'Fecha o ticket atual'},
 {name:'seguranca',description:'Mostra o estado da segurança',default_member_permissions:'8'},
 {name:'importar',description:'Registra um ZIP no ticket',options:[str('url','URL HTTPS direta do ZIP')]},
@@ -263,4 +290,7 @@ async function stopBuild(i,env) {
   return reply('🔓 **Trava liberada!**\n⚠️ Isso não interrompe a compilação remota que já estiver executando.',true);
 }
 
-export default {async fetch(request,env,ctx){const url=new URL(request.url);if(url.pathname==='/apk'&&request.method==='GET')return apkPage(request,env);if(url.pathname==='/upload-apk'&&request.method==='POST')return uploadApk(request,env);if(url.pathname==='/admin/register')return registerRoute(request,env);if(url.pathname==='/build-callback'&&request.method==='POST')return callback(request,env);if(url.pathname==='/download'&&request.method==='GET')return download(request,env);if(request.method!=='POST')return new Response('Not Found',{status:404});const body=await request.text();const valid=await verifyKey(body,request.headers.get('x-signature-ed25519')||'',request.headers.get('x-signature-timestamp')||'',env.DISCORD_PUBLIC_KEY);if(!valid)return new Response('Invalid signature',{status:401});const i=JSON.parse(body);if(i.type===InteractionType.PING)return Response.json({type:InteractionResponseType.PONG});if(i.type===InteractionType.APPLICATION_COMMAND){const name=i.data.name;if(name==='registrar'){if(!admin(i))return reply('❌ Somente administradores.',true);try{const names=await registerCommands(env,i.guild_id);return reply(`💙 **Aurora AI atualizada!**\n✅ ${names.length} comandos registrados.`,true)}catch(error){return reply(`❌ Registro falhou: ${String(error.message).slice(0,450)}`,true)}}if(name==='parar-build')return stopBuild(i,env);if(name==='setup-ticket'){if(!admin(i))return reply('Somente administradores.',true);return Response.json({type:4,data:{embeds:[{title:'Aurora Network | Atendimento',description:'Abra um ticket privado para suporte, edição de sources e compilação Android.',color:5814783}],components:[{type:1,components:[{type:2,style:1,label:'Abrir Ticket',custom_id:'aurora_open_ticket'}]}]}})}if(name==='ticket'){ctx.waitUntil(makeTicket(i,env).then(content=>editReply(i,{content})).catch(e=>editReply(i,{content:`❌ ${e.message}`})));return defer()}if(name==='fechar-ticket'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(!owner)return reply('Este canal não é um ticket.',true);if(owner!==uid(i)&&!admin(i))return reply('Sem permissão.',true);ctx.waitUntil((async()=>{await env.TICKETS.delete(`owner:${i.channel_id}`);await env.TICKETS.delete(`ticket:${i.guild_id}:${owner}`);await discord(env,`/channels/${i.channel_id}`,{method:'DELETE'})})().catch(console.error));return reply('🔒 Ticket encerrado.',true)}if(name==='seguranca'){if(!admin(i))return reply('Somente administradores.',true);return reply(`🛡️ Modo configurado: **${env.SECURITY_MODE||'delete'}**. O canal-armadilha requer um serviço Discord Gateway; o Worker sozinho não monitora mensagens.`,true)}if(name==='importar'||name==='enviar-source'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(owner!==uid(i)&&!admin(i))return reply('Use dentro do seu ticket.',true);ctx.waitUntil(importSource(i,env,opt(i,'url')).catch(e=>editReply(i,{content:`❌ ${e.message}`})));return defer()}if(name==='editar')return editSourceMenu(i,env);if(['aprovar','rejeitar','baixar'].includes(name)){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(owner!==uid(i)&&!admin(i))return reply('Use dentro do seu ticket.',true);return manageVersion(i,env,name,opt(i,'id'),request)}if(name==='sources'||name==='versoes'||name==='historico'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(owner!==uid(i)&&!admin(i))return reply('Use dentro do seu ticket.',true);const items=JSON.parse(await env.TICKETS.get(`sources:${i.channel_id}:${uid(i)}`)||'[]');return reply(items.length?items.slice(0,10).map(x=>`• \`${x.id}\` — ${x.created} — ${x.summary}`).join('\n').slice(0,1900):'Nenhuma source editada neste ticket.',true)}if(name==='builds')return reply('📊 Acompanhe o status das compilações nas mensagens deste ticket. O histórico persistente ainda não foi implementado.',true);if(name==='compilar'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(!owner||(owner!==uid(i)&&!admin(i)))return reply('Use dentro do seu ticket.',true);const zip=opt(i,'url');return zip?startBuild(i,env,zip,'',new URL(request.url).origin):buildModal()}if(name==='destravar')return stopBuild(i,env);}if(i.type===5&&i.data.custom_id==='modal_compilar')return startBuild(i,env,modalField(i,'zip_url_input'),modalField(i,'zip_password_input'),new URL(request.url).origin);if(i.type===5&&i.data.custom_id?.startsWith('aurora_edit_modal:'))return editModal(i,env,ctx);if(i.type===InteractionType.MESSAGE_COMPONENT){const id=i.data.custom_id;if(id==='aurora_edit_select')return editSelection(i,env);if(id==='compilar_apk'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(!owner||(owner!==uid(i)&&!admin(i)))return reply('Sem acesso a este ticket.',true);if(await env.TICKETS.get(`build_lock:${uid(i)}`))return reply('⚠️ Compilação em andamento.',true);return buildModal()}if(id==='aurora_edit_button')return editSourceMenu(i,env);if(id==='aurora_sources_button'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(!owner||(owner!==uid(i)&&!admin(i)))return reply('Sem acesso.',true);const items=JSON.parse(await env.TICKETS.get(`sources:${i.channel_id}:${owner}`)||'[]');return reply(items.length?items.slice(0,12).map(x=>`• ${x.id.slice(0,8)} — ${x.status} — ${x.summary}`).join('\n').slice(0,1900):'Nenhuma source cadastrada. Use /importar.',true)}if(id==='aurora_open_ticket'){ctx.waitUntil(makeTicket(i,env).then(content=>editReply(i,{content})).catch(e=>editReply(i,{content:`❌ ${e.message}`})));return defer()}if(id==='aurora_close_ticket'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(owner!==uid(i)&&!admin(i))return reply('Sem permissão.',true);ctx.waitUntil((async()=>{await env.TICKETS.delete(`owner:${i.channel_id}`);await env.TICKETS.delete(`ticket:${i.guild_id}:${owner}`);await discord(env,`/channels/${i.channel_id}`,{method:'DELETE'})})());return reply('🔒 Fechando ticket.',true)}}return reply('Comando não reconhecido.',true)}};
+export default {async fetch(request,env,ctx){const url=new URL(request.url);if(url.pathname==='/admin/register')return registerRoute(request,env);if(url.pathname==='/build-callback'&&request.method==='POST')return callback(request,env);if(url.pathname==='/build-progress'&&request.method==='POST')return progressCallback(request,env);if(request.method!=='POST')return new Response('Not Found',{status:404});const body=await request.text();const valid=await verifyKey(body,request.headers.get('x-signature-ed25519')||'',request.headers.get('x-signature-timestamp')||'',env.DISCORD_PUBLIC_KEY);if(!valid)return new Response('Invalid signature',{status:401});const i=JSON.parse(body);if(i.type===InteractionType.PING)return Response.json({type:InteractionResponseType.PONG});if(i.type===InteractionType.APPLICATION_COMMAND){const name=i.data.name;if(name==='registrar'){if(!admin(i))return reply('❌ Somente administradores.',true);try{const names=await registerCommands(env,i.guild_id);return reply(`💙 **Aurora AI atualizada!**\n✅ ${names.length} comandos registrados.`,true)}catch(error){return reply(`❌ Registro falhou: ${String(error.message).slice(0,450)}`,true)}}if(name==='parar-build')return stopBuild(i,env);if(name==='setup-ticket'){if(!admin(i))return reply('Somente administradores.',true);return Response.json({type:4,data:{embeds:[{title:'Aurora Network | Atendimento',description:'Abra um ticket privado para suporte, edição de sources e compilação Android.',color:5814783}],components:[{type:1,components:[{type:2,style:1,label:'Abrir Ticket',custom_id:'aurora_open_ticket'}]}]}})}if(name==='ticket')return publishSupportPanel(i,env);if(name==='build-ticket'){ctx.waitUntil(makeTicket(i,env).then(content=>editReply(i,{content})).catch(e=>editReply(i,{content:String(e.message)})));return defer()}if(name==='fechar-ticket'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(!owner)return reply('Este canal não é um ticket.',true);if(owner!==uid(i)&&!admin(i))return reply('Sem permissão.',true);ctx.waitUntil((async()=>{await env.TICKETS.delete(`owner:${i.channel_id}`);await env.TICKETS.delete(`ticket:${i.guild_id}:${owner}`);await discord(env,`/channels/${i.channel_id}`,{method:'DELETE'})})().catch(console.error));return reply('🔒 Ticket encerrado.',true)}if(name==='seguranca'){if(!admin(i))return reply('Somente administradores.',true);return reply(`🛡️ Modo configurado: **${env.SECURITY_MODE||'delete'}**. O canal-armadilha requer um serviço Discord Gateway; o Worker sozinho não monitora mensagens.`,true)}if(name==='importar'||name==='enviar-source'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(owner!==uid(i)&&!admin(i))return reply('Use dentro do seu ticket.',true);ctx.waitUntil(importSource(i,env,opt(i,'url')).catch(e=>editReply(i,{content:`❌ ${e.message}`})));return defer()}if(name==='editar')return editSourceMenu(i,env);if(['aprovar','rejeitar','baixar'].includes(name)){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(owner!==uid(i)&&!admin(i))return reply('Use dentro do seu ticket.',true);return manageVersion(i,env,name,opt(i,'id'),request)}if(name==='sources'||name==='versoes'||name==='historico'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(owner!==uid(i)&&!admin(i))return reply('Use dentro do seu ticket.',true);const items=JSON.parse(await env.TICKETS.get(`sources:${i.channel_id}:${uid(i)}`)||'[]');return reply(items.length?items.slice(0,10).map(x=>`• \`${x.id}\` — ${x.created} — ${x.summary}`).join('\n').slice(0,1900):'Nenhuma source editada neste ticket.',true)}if(name==='builds')return reply('📊 Acompanhe o status das compilações nas mensagens deste ticket. O histórico persistente ainda não foi implementado.',true);if(name==='compilar'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(!owner||(owner!==uid(i)&&!admin(i)))return reply('Use dentro do seu ticket.',true);const zip=opt(i,'url');return zip?startBuild(i,env,zip,'',new URL(request.url).origin):buildModal()}if(name==='destravar')return stopBuild(i,env);}if(i.type===5&&i.data.custom_id==='modal_compilar')return startBuild(i,env,modalField(i,'zip_url_input'),modalField(i,'zip_password_input'),new URL(request.url).origin);if(i.type===5&&i.data.custom_id?.startsWith('aurora_edit_modal:'))return editModal(i,env,ctx);if(i.type===InteractionType.MESSAGE_COMPONENT){const id=i.data.custom_id;if(id==='aurora_edit_select')return editSelection(i,env);if(id==='compilar_apk'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(!owner||(owner!==uid(i)&&!admin(i)))return reply('Sem acesso a este ticket.',true);if(await env.TICKETS.get(`build_lock:${uid(i)}`))return reply('⚠️ Compilação em andamento.',true);return buildModal()}if(id==='aurora_edit_button')return editSourceMenu(i,env);if(id==='aurora_sources_button'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(!owner||(owner!==uid(i)&&!admin(i)))return reply('Sem acesso.',true);const items=JSON.parse(await env.TICKETS.get(`sources:${i.channel_id}:${owner}`)||'[]');return reply(items.length?items.slice(0,12).map(x=>`• ${x.id.slice(0,8)} — ${x.status} — ${x.summary}`).join('\n').slice(0,1900):'Nenhuma source cadastrada. Use /importar.',true)}if(id==='support:buy'||id==='support:tech'){const category=id==='support:buy'?'buy':'tech';ctx.waitUntil(createSupportTicket(i,env,category).then(content=>editReply(i,{content})).catch(e=>editReply(i,{content:'❌ '+String(e.message).slice(0,300)})));return defer()}
+if(id==='support:close'){const info=JSON.parse(await env.TICKETS.get('support:'+i.channel_id)||'null');if(!info||(info.owner_id!==uid(i)&&!admin(i)))return reply('Sem permissão para fechar este atendimento.',true);return Response.json({type:4,data:{flags:64,content:'Tem certeza que deseja fechar o atendimento?',components:[{type:1,components:[{type:2,style:4,label:'Confirmar fechamento',custom_id:'support:confirm-close'},{type:2,style:2,label:'Cancelar',custom_id:'support:cancel-close'}]}]}})}
+if(id==='support:cancel-close')return reply('Fechamento cancelado.',true)
+if(id==='support:confirm-close'){const info=JSON.parse(await env.TICKETS.get('support:'+i.channel_id)||'null');if(!info||(info.owner_id!==uid(i)&&!admin(i)))return reply('Sem permissão para fechar este atendimento.',true);ctx.waitUntil(closeSupportTicket(env,i.channel_id).catch(e=>console.error('Ticket close:',String(e.message))));return reply('🔒 Encerrando e registrando o atendimento.',true)}if(id==='aurora_open_ticket'){ctx.waitUntil(makeTicket(i,env).then(content=>editReply(i,{content})).catch(e=>editReply(i,{content:`❌ ${e.message}`})));return defer()}if(id==='aurora_close_ticket'){const owner=await env.TICKETS.get(`owner:${i.channel_id}`);if(owner!==uid(i)&&!admin(i))return reply('Sem permissão.',true);ctx.waitUntil((async()=>{await env.TICKETS.delete(`owner:${i.channel_id}`);await env.TICKETS.delete(`ticket:${i.guild_id}:${owner}`);await discord(env,`/channels/${i.channel_id}`,{method:'DELETE'})})());return reply('🔒 Fechando ticket.',true)}}return reply('Comando não reconhecido.',true)}};

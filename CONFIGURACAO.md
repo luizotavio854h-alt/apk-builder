@@ -1,30 +1,23 @@
 # Configuração Aurora
 
-## Armazenamento
+## Armazenamento de arquivos
 
-Todos os arquivos binários do projeto agora são enviados ao GoFile Guest: APKs compilados, ZIPs importados e versões geradas pela Aurora AI. O Worker mantém no KV somente dados de controle e ponteiros de download; não há binding R2 no `wrangler.toml`.
-
-Uploads do Worker criam uma conta Guest automaticamente. O token retornado pela API é guardado no KV junto dos metadados do arquivo e usado pelo Worker para reabrir o ZIP para a IA. Não configure token GoFile e não compartilhe esse token. Os links `downloadPage` são links públicos não listados; qualquer pessoa que receba o link pode acessar o arquivo.
-
-O importador ainda limita ZIPs a 12 MB para edição dentro do Worker. Arquivos maiores não são carregados na memória do Worker. O workflow do GitHub Actions envia APKs como stream multipart diretamente do disco.
+APKs, ZIPs importados e projetos editados pela Aurora AI são armazenados no GoFile Guest. O KV `TICKETS` guarda apenas metadados e credenciais Guest para reabrir os arquivos. O portal `/upload` aceita arquivos ZIP de até 12 MB e associa cada envio ao ticket que criou o link.
 
 ## Cloudflare Worker
 
-Mantenha o namespace KV `TICKETS`. O Worker não tem mais binding R2. Remova o binding `STORAGE` da configuração do Worker e o secret `DOWNLOAD_SECRET`, que pertenciam às rotas antigas de download; não é necessário apagar o bucket existente. Configure como vars/secrets:
+Mantenha o namespace KV `TICKETS`. Configure os seguintes secrets e variáveis:
 
-- Já existentes: `DISCORD_BOT_TOKEN`, `CALLBACK_SECRET`, `GITHUB_TOKEN`, `GITHUB_USER`, `GITHUB_REPO`, `GITHUB_REF`, `DISCORD_APPLICATION_ID`, `DISCORD_GUILD_ID`, `HF_TOKEN`, `REGISTER_SECRET`.
-- Atendimento comum: `SUPPORT_CATEGORY_ID` e `SUPPORT_PANEL_CHANNEL_ID` (IDs reais de categoria/canal); `STAFF_ROLE_ID` (cargo real da equipe); `SUPPORT_LOG_CHANNEL_ID` é opcional e recebe o registro/transcrição compacta do encerramento.
-- `TICKET_CATEGORY_ID` segue reservado aos tickets de compilação APK.
+- Já existentes: `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, `CALLBACK_SECRET`, `GITHUB_TOKEN`, `GITHUB_USER`, `GITHUB_REPO`, `GITHUB_REF`, `DISCORD_APPLICATION_ID`, `DISCORD_GUILD_ID`, `HF_TOKEN`, `REGISTER_SECRET`.
+- Tickets de compilacao: `TICKET_CATEGORY_ID`.
+- Atendimento comum: `SUPPORT_CATEGORY_ID`, `SUPPORT_PANEL_CHANNEL_ID` e, opcionalmente, `STAFF_ROLE_ID` e `SUPPORT_LOG_CHANNEL_ID`.
 
-O `CALLBACK_SECRET` continua protegido e disponível nos GitHub Actions Secrets. Nenhum token GoFile é necessário no GitHub.
+Configure o mesmo valor de `CALLBACK_SECRET` nos secrets do GitHub Actions e no Worker. Nenhum token GoFile precisa ser configurado.
 
-Depois de configurar, execute `/registrar` para atualizar os comandos de guild. Use `/setup-ticket` para publicar o painel antigo de compilação e `/ticket` para publicar o painel de atendimento comum.
+## GitHub Actions
 
-## Tickets independentes
+O branch indicado por `GITHUB_REF` precisa conter `.github/workflows/engine.yml` com o input `build_id` e os scripts atuais. O workflow envia o APK ao GoFile e atualiza o Worker com o progresso e o resultado.
 
-- O ticket de compilação Android usa `TICKET_CATEGORY_ID`, o seu fluxo atual e chaves de KV próprias. `/build-ticket` abre um ticket APK; `/setup-ticket` publica o painel antigo.
-- `/ticket` publica somente 🛒 Comprar Aplicativos e 🛠️ Suporte Técnico. Os canais usam `SUPPORT_CATEGORY_ID` e chaves `support-ticket:*` separadas.
+## Inicializacao
 
-## Dados existentes no R2
-
-Os arquivos antigos que já estavam no R2 não são migrados automaticamente. Antes de retirar o bucket, reimporte os projetos antigos necessários pelo comando `/importar`; depois do deploy sem o binding, links antigos de APK e projetos assinados do R2 deixam de funcionar.
+Depois do deploy, execute `/registrar` no Discord. Use `/setup-ticket` para publicar o painel de compilação e `/ticket` para publicar o painel de atendimento comum. Dentro do ticket de compilação, `/enviar-zip` cria um link temporário para o portal; o botão de upload também aparece ao abrir tickets novos.

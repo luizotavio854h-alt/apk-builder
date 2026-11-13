@@ -1,6 +1,6 @@
 # Aurora Android Engine
 
-Cloudflare Worker para interações do Discord, importação e edição de sources, tickets de compilação e despacho de builds Android pelo GitHub Actions.
+Cloudflare Worker para Discord, tickets privados, envio de ZIP ao GoFile, edição de projetos pela Aurora AI e compilação Android pelo GitHub Actions.
 
 ## Deploy do Worker
 
@@ -10,14 +10,16 @@ npm run dev
 npm run deploy
 ```
 
-O namespace KV e as variáveis do Worker estão em `wrangler.toml`. Configure secrets no painel Cloudflare. Consulte [CONFIGURACAO.md](CONFIGURACAO.md) para GoFile Guest, tickets comuns, serviço de voz e as variáveis necessárias.
+O Worker usa o namespace KV `TICKETS`. Configure os secrets e variáveis descritos em [CONFIGURACAO.md](CONFIGURACAO.md).
 
-## Publicação e progresso do APK
+## Envio e compilacao
 
-O workflow `.github/workflows/engine.yml` mantém o processo de detecção de projeto/toolchain, Gradle, coleta dos APKs e artefatos diagnósticos. Ele envia o APK ao GoFile Guest por multipart stream e informa o `downloadPage` verificado pelo callback final autenticado. O Worker edita a mensagem original de acompanhamento. ZIPs importados e versões editadas pela IA também são armazenados no GoFile; o KV guarda somente metadados e os ponteiros necessários para reabrir cada arquivo.
+Dentro de um ticket, use `/enviar-zip` para abrir o portal privado de upload. O portal recebe ZIPs de até 12 MB e salva o arquivo no GoFile sem depender de um link externo acessível ao Worker. Também é possível usar `/importar` com um link público direto.
 
-## Comandos
+Use `/editar` para pedir alterações pela Aurora AI e `/compilar` para gerar o APK. O workflow `.github/workflows/engine.yml` acompanha a build, envia o APK ao GoFile Guest e atualiza a mensagem do ticket.
 
-- `/ticket` publica o painel com as duas opções de atendimento comum.
-- `/build-ticket` abre um ticket de compilação APK; `/setup-ticket` publica o painel antigo desse fluxo.
-- `/registrar` atualiza os comandos de guild depois de configurar os secrets e os canais.
+## Tickets
+
+- `/setup-ticket` publica o painel de compilação Android.
+- `/ticket` publica o painel de atendimento comum.
+- `/registrar` atualiza os comandos do servidor depois do deploy.

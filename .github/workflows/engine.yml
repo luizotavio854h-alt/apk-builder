@@ -23,6 +23,10 @@ on:
         description: 'Cloudflare Worker base URL'
         required: true
         type: string
+      build_id:
+        description: 'Build identifier issued by the Worker'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -48,17 +52,60 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Report build progress
+        env:
+          WORKER_URL: ${{ inputs.worker_url }}
+          CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+          BUILD_ID: ${{ inputs.build_id }}
+          USER_ID: ${{ inputs.user_id }}
+          CHANNEL_ID: ${{ inputs.channel_id }}
+          PROGRESS_STEP: '0'
+          PROGRESS_STAGE: '⚙️ Preparando ambiente'
+        run: python3 scripts/progress.py
+
       - name: Prepare ZIP and detect project root
-        run: python3 scripts/prepare_project.py
+        env:
+          WORKER_URL: ${{ inputs.worker_url }}
+          CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+          BUILD_ID: ${{ inputs.build_id }}
+          USER_ID: ${{ inputs.user_id }}
+          CHANNEL_ID: ${{ inputs.channel_id }}
+          PROGRESS_STEP: '1'
+          PROGRESS_STAGE: '💿 Extraindo arquivos do projeto'
+        run: |
+          python3 scripts/progress.py
+          python3 scripts/prepare_project.py
 
       - name: Detect toolchain
-        run: python3 scripts/detect_toolchain.py
+        id: toolchain
+        env:
+          WORKER_URL: ${{ inputs.worker_url }}
+          CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+          BUILD_ID: ${{ inputs.build_id }}
+          USER_ID: ${{ inputs.user_id }}
+          CHANNEL_ID: ${{ inputs.channel_id }}
+          PROGRESS_STEP: '2'
+          PROGRESS_STAGE: '🔍 Detectando configurações e dependências'
+        run: |
+          python3 scripts/progress.py
+          python3 scripts/detect_toolchain.py
+
+      - name: Report Android setup
+        env:
+          WORKER_URL: ${{ inputs.worker_url }}
+          CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+          BUILD_ID: ${{ inputs.build_id }}
+          USER_ID: ${{ inputs.user_id }}
+          CHANNEL_ID: ${{ inputs.channel_id }}
+          PROGRESS_STEP: '3'
+          PROGRESS_STAGE: '📱 Configurando Java e Android SDK'
+        run: python3 scripts/progress.py
 
       - name: Configure detected JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version: ${{ steps.toolchain.outputs.java_version }}
 
       - name: Configure Android SDK
         uses: android-actions/setup-android@v3
@@ -68,9 +115,9 @@ jobs:
 
       - name: Install required SDK packages
         env:
-          SDK: ${{ env.COMPILE_SDK }}
-          NDK: ${{ env.NDK_VERSION }}
-          CMAKE: ${{ env.CMAKE_VERSION }}
+          SDK: ${{ steps.toolchain.outputs.compile_sdk }}
+          NDK: ${{ steps.toolchain.outputs.ndk_version }}
+          CMAKE: ${{ steps.toolchain.outputs.cmake_version }}
         run: |
           set -euo pipefail
           packages=("platform-tools" "platforms;android-${SDK}")
@@ -82,7 +129,26 @@ jobs:
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Report Gradle preparation
+        env:
+          WORKER_URL: ${{ inputs.worker_url }}
+          CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+          BUILD_ID: ${{ inputs.build_id }}
+          USER_ID: ${{ inputs.user_id }}
+          CHANNEL_ID: ${{ inputs.channel_id }}
+          PROGRESS_STEP: '4'
+          PROGRESS_STAGE: '🔧 Preparando Gradle'
+        run: python3 scripts/progress.py
+
       - name: Build APK with Gradle
+        env:
+          WORKER_URL: ${{ inputs.worker_url }}
+          CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+          BUILD_ID: ${{ inputs.build_id }}
+          USER_ID: ${{ inputs.user_id }}
+          CHANNEL_ID: ${{ inputs.channel_id }}
+          PROGRESS_STEP: '5'
+          PROGRESS_STAGE: '🏗️ Compilando o aplicativo'
         shell: bash
         run: |
           set -euo pipefail
@@ -96,6 +162,14 @@ jobs:
           fi
 
       - name: Collect generated APKs
+        env:
+          WORKER_URL: ${{ inputs.worker_url }}
+          CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+          BUILD_ID: ${{ inputs.build_id }}
+          USER_ID: ${{ inputs.user_id }}
+          CHANNEL_ID: ${{ inputs.channel_id }}
+          PROGRESS_STEP: '6'
+          PROGRESS_STAGE: '📦 Localizando o APK'
         shell: bash
         run: |
           set -euo pipefail
@@ -117,13 +191,27 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Publish APK on Aurora Worker R2
+      - name: Publish APK to GoFile Guest
         env:
           WORKER_URL: ${{ inputs.worker_url }}
           CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+          BUILD_ID: ${{ inputs.build_id }}
           USER_ID: ${{ inputs.user_id }}
           CHANNEL_ID: ${{ inputs.channel_id }}
+          PROGRESS_STEP: '7'
+          PROGRESS_STAGE: '☁️ Enviando APK para GoFile Guest'
         run: python3 scripts/upload_apk.py
+
+      - name: Report finalization
+        env:
+          WORKER_URL: ${{ inputs.worker_url }}
+          CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+          BUILD_ID: ${{ inputs.build_id }}
+          USER_ID: ${{ inputs.user_id }}
+          CHANNEL_ID: ${{ inputs.channel_id }}
+          PROGRESS_STEP: '8'
+          PROGRESS_STAGE: '🎉 Finalizando compilação'
+        run: python3 scripts/progress.py
 
       - name: Save private APK link for notification
         uses: actions/upload-artifact@v4
@@ -143,6 +231,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Save concise failure reason
+        if: failure()
+        shell: bash
+        run: |
+          echo "Falha de compilação/publicação. Consulte o artefato Aurora-Build-Logs e a etapa com erro nesta execução." > build_failure.txt
+      - name: Upload failure reason
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aurora-Build-Failure
+          path: build_failure.txt
+          retention-days: 1
+
   notify:
     name: Notify Worker and release build lock
     needs: [build]
@@ -159,6 +260,7 @@ jobs:
       BUILD_RESULT: ${{ needs.build.result }}
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
       ARTIFACT_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts
+      BUILD_ID: ${{ inputs.build_id }}
     steps:
       - name: Checkout notification script
         uses: actions/checkout@v4
@@ -169,5 +271,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: Aurora-Private-Link
+      - name: Retrieve failure reason
+        if: needs.build.result != 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: Aurora-Build-Failure
       - name: Send completion callback
         run: python3 scripts/notify.py

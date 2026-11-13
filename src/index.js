@@ -71,7 +71,7 @@ function buildTicketPanel(){return Response.json({type:4,data:{embeds:[{
  ],
  footer:{text:'AURORA  •  Seus arquivos e atendimento ficam neste ticket'},
  timestamp:new Date().toISOString()
-}],components:[{type:1,components:[{type:3,custom_id:'aurora:build-ticket-select',placeholder:'🎫  Abrir um ticket de compilação',min_values:1,max_values:1,options:[{label:'Compilação Android',value:'open',description:'Importar projeto, usar a IA e gerar APK',emoji:{name:'📱'}}]}]}]}})}
+}],components:[{type:1,components:[{type:2,style:1,label:'Compilar APK',emoji:{name:'🏗️'},custom_id:'aurora_open_ticket'}]}]}})}
 async function fetchZip(url){
  if(!isHttps(url))throw Error('Informe um link HTTPS válido.');
  const limit=12*1024*1024;

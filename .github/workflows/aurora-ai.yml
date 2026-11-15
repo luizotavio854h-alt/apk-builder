@@ -1,0 +1,69 @@
+name: Aurora AI Project Editor
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Index a project ZIP or edit a selected file
+        required: true
+        type: choice
+        options:
+          - index
+          - edit
+      job_id:
+        description: Worker job identifier
+        required: true
+        type: string
+      source_id:
+        description: Ticket source identifier
+        required: true
+        type: string
+      channel_id:
+        description: Discord ticket channel ID
+        required: true
+        type: string
+      user_id:
+        description: Discord user ID
+        required: true
+        type: string
+      worker_url:
+        description: Cloudflare Worker base URL
+        required: true
+        type: string
+      file_index:
+        description: Selected file index for edit tasks
+        required: false
+        type: string
+      instruction:
+        description: Requested change for the selected file
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  project-ai:
+    name: Index or edit Android project
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout trusted Aurora scripts
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run project analysis
+        env:
+          AURORA_TASK: ${{ inputs.task }}
+          AURORA_JOB_ID: ${{ inputs.job_id }}
+          AURORA_SOURCE_ID: ${{ inputs.source_id }}
+          AURORA_CHANNEL_ID: ${{ inputs.channel_id }}
+          AURORA_USER_ID: ${{ inputs.user_id }}
+          AURORA_WORKER_URL: ${{ inputs.worker_url }}
+          AURORA_FILE_INDEX: ${{ inputs.file_index }}
+          AURORA_INSTRUCTION: ${{ inputs.instruction }}
+          CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: qwen/qwen3.8-27b
+        run: python3 scripts/ai_project.py

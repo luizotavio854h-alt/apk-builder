@@ -35,10 +35,19 @@ def valid_gofile_url(url):
             and any(host == root or host.endswith('.' + root) for root in ('gofile.io', 'gofile.is')))
 
 
-def check_public_url(url):
+def valid_gofile_storage_url(url):
+    # GoFile's signed /dl endpoint redirects bytes to its own Cloudflare R2 host.
+    parsed = urllib.parse.urlparse(url or '')
+    host = (parsed.hostname or '').lower().rstrip('.')
+    return (parsed.scheme == 'https' and not parsed.username and not parsed.password
+            and re.fullmatch(r'[a-z0-9-]+\.r2\.cloudflarestorage\.com', host) is not None)
+
+
+def check_public_url(url, allow_gofile_storage=False):
     parsed = urllib.parse.urlparse(url)
     host = (parsed.hostname or '').lower()
-    if parsed.scheme != 'https' or parsed.username or parsed.password or not valid_gofile_url(url):
+    allowed = valid_gofile_url(url) or (allow_gofile_storage and valid_gofile_storage_url(url))
+    if parsed.scheme != 'https' or parsed.username or parsed.password or not allowed:
         raise ValueError('O link da source não é um download HTTPS válido do GoFile.')
     try:
         addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
@@ -52,24 +61,26 @@ def check_public_url(url):
 
 class SafeRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, msg, headers, new_url):
-        check_public_url(new_url)
-        return super().redirect_request(request, fp, code, msg, headers, new_url)
+        if not valid_gofile_url(request.full_url) and valid_gofile_storage_url(new_url):
+            raise ValueError('O redirecionamento de storage precisa vir diretamente do GoFile.')
+        check_public_url(new_url, allow_gofile_storage=True)
+        redirected = super().redirect_request(request, fp, code, msg, headers, new_url)
+        if redirected and not valid_gofile_url(new_url):
+            redirected.remove_header('Authorization')
+            redirected.remove_header('Cookie')
+        return redirected
 
 
 OPENER = urllib.request.build_opener(SafeRedirect)
 
 
-def download_source(url, output_path, guest_token, file_id='', file_code='', server='', file_name=''):
+def download_source(url, output_path, guest_token, file_code=''):
     if not re.fullmatch(r'[-A-Za-z0-9._~]{12,4096}', guest_token or ''):
         raise ValueError('A credencial Guest da source está ausente ou inválida.')
 
     candidates = [url]
     if re.fullmatch(r'[A-Za-z0-9_-]{6,32}', file_code or ''):
-        candidates.extend((f'https://gofile.is/dl/{file_code}', f'https://gofile.io/dl/{file_code}'))
-    if (re.fullmatch(r'[a-f0-9-]{8,80}', file_id or '', re.I)
-            and re.fullmatch(r'[a-z0-9-]+', server or '', re.I)):
-        filename = urllib.parse.quote(file_name or 'project.zip')
-        candidates.append(f'https://{server}.gofile.io/download/web/{file_id}/{filename}')
+        candidates.append(f'https://gofile.is/dl/{file_code}')
     candidates = list(dict.fromkeys(candidate for candidate in candidates if candidate))
 
     def fetch_zip(candidate, depth=0):
@@ -85,7 +96,7 @@ def download_source(url, output_path, guest_token, file_id='', file_code='', ser
         )
         with OPENER.open(request, timeout=120) as response:
             final_url = response.geturl()
-            check_public_url(final_url)
+            check_public_url(final_url, allow_gofile_storage=True)
             declared_length = int(response.headers.get('Content-Length') or 0)
             if declared_length > MAX_ZIP:
                 raise ValueError('A IA aceita ZIPs de até 600 MB por tarefa no GitHub Actions.')
@@ -547,9 +558,7 @@ def main():
     os.makedirs('workspace', exist_ok=True)
     zip_path = 'workspace/project-source.zip'
     print('Baixando source do GoFile...', flush=True)
-    archive_size = download_source(
-        source['source_url'], zip_path, source['guest_token'], source['file_id'],
-        source['file_code'], source['server'], source['file_name'])
+    archive_size = download_source(source['source_url'], zip_path, source['guest_token'], source['file_code'])
     if task == 'index':
         with zipfile.ZipFile(zip_path) as archive:
             members, total_unpacked = inspect_archive(archive)

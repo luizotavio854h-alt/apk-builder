@@ -110,15 +110,20 @@ async function fetchZip(url){
 }
 const GOFILE_UPLOAD_URL='https://upload.gofile.io/uploadfile';
 function validGofileUrl(value){try{const u=new URL(value);return u.protocol==='https:'&&/(^|\.)gofile\.io$/i.test(u.hostname)}catch{return false}}
+function gofileDownloadUrl(link,server,fileId,fileName){
+ try{const parsed=new URL(link||'');if(validGofileUrl(parsed.href)&&/^\/download\/(?:web|direct)\//i.test(parsed.pathname))return parsed.href;const host=parsed.hostname.toLowerCase();if(!server&&/^[a-z0-9-]+\.gofile\.io$/i.test(host)&&host!=='gofile.io'&&host!=='www.gofile.io')server=host.slice(0,-'.gofile.io'.length)}catch{}
+ if(/^[a-f0-9-]{8,80}$/i.test(String(fileId||''))&&/^[a-z0-9-]+$/i.test(String(server||'')))return `https://${server}.gofile.io/download/web/${fileId}/${encodeURIComponent(String(fileName||'project.zip'))}`;
+ return link||'';
+}
 async function uploadGofile(bytes,filename,contentType='application/zip'){
  const form=new FormData();form.append('file',new Blob([bytes],{type:contentType}),filename);
  let response,data;try{response=await fetch(GOFILE_UPLOAD_URL,{method:'POST',body:form,signal:AbortSignal.timeout(180000)});data=await response.json()}catch(e){throw Error(`Upload GoFile falhou por conexão ou resposta inválida (${e.name||'erro'}).`)}
  if(!response.ok||data?.status!=='ok')throw Error(`GoFile recusou o upload (${response.status}, ${String(data?.status||'resposta inválida').slice(0,80)}).`);
  const d=data.data||{},downloadPage=d.downloadPage||'',id=d.id||'',server=d.serverSelected||d.servers?.[0]||'',fileName=d.name||filename;
- let directUrl=d.link||'';if(!directUrl&&/^[a-z0-9-]{8,80}$/i.test(id)&&/^[a-z0-9-]+$/i.test(server))directUrl=`https://${server}.gofile.io/download/web/${id}/${encodeURIComponent(fileName)}`;
+ const directUrl=gofileDownloadUrl(d.link,server,id,fileName);
  if(!validGofileUrl(downloadPage)||!validGofileUrl(directUrl))throw Error('GoFile confirmou o envio, mas não retornou dados públicos de download válidos.');
  const guestToken=d.guestToken||d.token||'';if(typeof guestToken!=='string'||!/^[-A-Za-z0-9._~]{12,4096}$/.test(guestToken))throw Error('GoFile não retornou uma credencial Guest válida para reabrir o ZIP pela IA.');
- return {downloadPage,directUrl,fileId:id,guestToken,name:fileName,size:Number(d.size)||bytes.byteLength};
+ return {downloadPage,directUrl,fileId:id,server,guestToken,name:fileName,size:Number(d.size)||bytes.byteLength};
 }
 const ZIP_UPLOAD_LIMIT=20_000_000_000;
 function formatFileSize(size){return size>=1e9?`${(size/1e9).toFixed(2)} GB`:`${(size/1e6).toFixed(1)} MB`}
@@ -158,12 +163,12 @@ async function zipUploadRoute(request,env){
  if(!/^[a-f0-9-]{36}$/i.test(id)||!/\.zip$/i.test(originalName)||!Number.isSafeInteger(size)||size<4||size>ZIP_UPLOAD_LIMIT)return respond({ok:false,error:'Arquivo inválido ou acima do limite de 20 GB.'},400);
  if(upload?.status!=='ok'||!upload.data)return respond({ok:false,error:'O GoFile não confirmou o envio.'},400);
  const d=upload.data,uploadedSize=Number(d.size)||size,fileId=String(d.id||''),fileName=String(d.name||`aurora-source-${id}-${originalName}`),guestToken=d.guestToken||d.token||'',server=String(d.serverSelected||d.servers?.[0]||'');
- const directUrl=d.link||(/^[a-z0-9-]{8,80}$/i.test(fileId)&&/^[a-z0-9-]+$/i.test(server)?`https://${server}.gofile.io/download/web/${fileId}/${encodeURIComponent(fileName)}`:'');
+ const directUrl=gofileDownloadUrl(d.link,server,fileId,fileName);
  const code=String(d.parentFolderCode||d.code||''),downloadPage=d.downloadPage||(/^[-A-Za-z0-9]{6,20}$/.test(code)?`https://gofile.io/d/${code}`:'');
  if(!Number.isSafeInteger(uploadedSize)||uploadedSize<4||uploadedSize>ZIP_UPLOAD_LIMIT)return respond({ok:false,error:'O GoFile informou um tamanho inválido para o arquivo.'},400);
  if(!/^[a-f0-9-]{8,80}$/i.test(fileId)||!validGofileUrl(downloadPage)||!validGofileUrl(directUrl)||typeof guestToken!=='string'||!/^[-A-Za-z0-9._~]{12,4096}$/.test(guestToken))return respond({ok:false,error:'O GoFile não retornou metadados Guest válidos para o ZIP.'},400);
  const safeName=originalName.split(/[\\/]/).pop().replace(/[^\w. -]/g,'_').slice(0,90)||'projeto.zip';
- const stored={downloadPage,directUrl,fileId,guestToken,name:fileName,size:uploadedSize};
+ const stored={downloadPage,directUrl,fileId,server,guestToken,name:fileName,size:uploadedSize};
  try{
   const key=`sources:${session.channel_id}:${session.user_id}`,items=JSON.parse(await env.TICKETS.get(key)||'[]');
   items.unshift({id,original_file:stored,summary:`ZIP enviado pelo portal: ${safeName}`,status:'approved',created:new Date().toISOString()});
@@ -212,7 +217,8 @@ async function dispatchAiTask(env,sourceId,sourceFile,channel,user,task,extra={}
  const workerUrl=String(workerUrlOverride||env.WORKER_URL||'').replace(/\/+$/,'');if(!isHttps(workerUrl))throw Error('Não consegui determinar o endereço HTTPS público do Worker.');
  if(!sourceFile||!validGofileUrl(sourceFile.directUrl)||!/^[-A-Za-z0-9._~]{12,4096}$/.test(String(sourceFile.guestToken||'')))throw Error('O ZIP da source não tem dados Guest GoFile válidos.');
  if(Number(sourceFile.size)>600*1024*1024)throw Error('A leitura pela IA aceita ZIPs de até 600 MB e projetos de até 3 GB descompactados.');
- const jobId=crypto.randomUUID(),job={job_id:jobId,task,source_id:sourceId,channel_id:channel,user_id:user,source_url:sourceFile.directUrl,source_guest_token:sourceFile.guestToken,archive_file_id:sourceFile.fileId||'',status:'queued',created_at:Date.now(),file_index:extra.file_index??'',instruction:extra.instruction||''};
+ const sourceUrl=gofileDownloadUrl(sourceFile.directUrl,sourceFile.server,sourceFile.fileId,sourceFile.name);if(!validGofileUrl(sourceUrl))throw Error('Não consegui resolver o endereço do arquivo GoFile.');
+ const jobId=crypto.randomUUID(),job={job_id:jobId,task,source_id:sourceId,channel_id:channel,user_id:user,source_url:sourceUrl,source_guest_token:sourceFile.guestToken,archive_file_id:sourceFile.fileId||'',status:'queued',created_at:Date.now(),file_index:extra.file_index??'',instruction:extra.instruction||''};
  if(task==='edit'){
   const manifest=JSON.parse(await env.TICKETS.get(aiProjectKey(channel,user,sourceId))||'null'),file=manifest?.archive_file_id===job.archive_file_id?manifest.files?.[Number(job.file_index)]:null;
   if(!file)throw Error('A lista de arquivos expirou ou pertence a outra versão. Use /editar e escolha a source novamente.');

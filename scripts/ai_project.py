@@ -60,33 +60,59 @@ OPENER = urllib.request.build_opener(SafeRedirect)
 
 
 def download_source(url, output_path, guest_token):
-    check_public_url(url)
     if not re.fullmatch(r'[-A-Za-z0-9._~]{12,4096}', guest_token or ''):
         raise ValueError('A credencial Guest da source está ausente ou inválida.')
-    request = urllib.request.Request(
-        url,
-        headers={'User-Agent': 'AuroraAIProjectIndexer/1.0', 'Accept': 'application/zip,application/octet-stream,*/*',
-                 'Cookie': f'accountToken={guest_token}'},
-    )
-    total = 0
-    with OPENER.open(request, timeout=120) as response, open(output_path, 'wb') as output:
-        check_public_url(response.geturl())
-        declared_length = int(response.headers.get('Content-Length') or 0)
-        if declared_length > MAX_ZIP:
-            raise ValueError('A IA aceita ZIPs de até 600 MB por tarefa no GitHub Actions.')
-        signature = response.read(4)
-        if not signature.startswith((b'PK\x03\x04', b'PK\x05\x06', b'PK\x07\x08')):
-            raise ValueError('O GoFile não retornou um arquivo ZIP direto e válido.')
-        output.write(signature)
-        total = len(signature)
-        while True:
-            block = response.read(1024 * 1024)
-            if not block:
-                break
-            total += len(block)
-            if total > MAX_ZIP:
+    def fetch_zip(candidate, depth=0):
+        if depth > 3:
+            raise ValueError('O GoFile redirecionou várias vezes sem entregar o ZIP.')
+        check_public_url(candidate)
+        request = urllib.request.Request(
+            candidate,
+            headers={'User-Agent': 'Mozilla/5.0 (compatible; AuroraAndroidEngine/1.0)',
+                     'Accept': 'application/octet-stream,application/zip,*/*',
+                     'Referer': 'https://gofile.io/', 'Cookie': f'accountToken={guest_token}'},
+        )
+        with OPENER.open(request, timeout=120) as response:
+            final_url = response.geturl()
+            check_public_url(final_url)
+            declared_length = int(response.headers.get('Content-Length') or 0)
+            if declared_length > MAX_ZIP:
                 raise ValueError('A IA aceita ZIPs de até 600 MB por tarefa no GitHub Actions.')
-            output.write(block)
+            signature = response.read(4)
+            if signature.startswith((b'PK\x03\x04', b'PK\x05\x06', b'PK\x07\x08')):
+                total = len(signature)
+                with open(output_path, 'wb') as output:
+                    output.write(signature)
+                    while True:
+                        block = response.read(1024 * 1024)
+                        if not block:
+                            break
+                        total += len(block)
+                        if total > MAX_ZIP:
+                            raise ValueError('A IA aceita ZIPs de até 600 MB por tarefa no GitHub Actions.')
+                        output.write(block)
+                return total
+
+            content_type = (response.headers.get('Content-Type') or '').split(';', 1)[0].lower()
+            body = signature + response.read(1024 * 1024 - len(signature))
+            if content_type in ('text/html', 'application/xhtml+xml') or b'<html' in body[:2048].lower():
+                page = body.decode('utf-8', 'replace')
+                page = page.replace('\\u0026', '&').replace('\\/', '/').replace('&amp;', '&')
+                links = re.findall(r'https?://[a-z0-9.-]*gofile\.io/download/(?:web|direct)/[^\s"\'<>\\]+', page, re.I)
+                links += re.findall(r'(?<![A-Za-z0-9])/(?:download/web|download/direct)/[^\s"\'<>\\]+', page, re.I)
+                for link in links:
+                    direct = urllib.parse.urljoin(final_url, link.rstrip('),;'))
+                    if direct.rstrip('/') == final_url.rstrip('/'):
+                        continue
+                    try:
+                        return fetch_zip(direct, depth + 1)
+                    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, ValueError):
+                        continue
+            safe_location = urllib.parse.urlparse(final_url)
+            detail = f'Content-Type {content_type or "desconhecido"} em {safe_location.hostname}{safe_location.path}'
+            raise ValueError(f'O GoFile respondeu sem os bytes do ZIP ({detail}). Confira se a source ainda está pública e tente enviar novamente pelo portal.')
+
+    total = fetch_zip(url)
     if not zipfile.is_zipfile(output_path):
         raise ValueError('O arquivo baixado está incompleto ou não é um ZIP válido.')
     return total
@@ -390,7 +416,13 @@ def upload_gofile(file_path):
     file_name = str(data.get('name') or pathlib.Path(file_path).name)
     server = str(data.get('serverSelected') or next(iter(data.get('servers') or []), ''))
     direct_url = data.get('link') or ''
-    if not direct_url and re.fullmatch(r'[a-f0-9-]{8,80}', file_id, re.I) and re.fullmatch(r'[a-z0-9-]+', server, re.I):
+    try:
+        direct_path = urllib.parse.urlparse(direct_url).path
+    except ValueError:
+        direct_path = ''
+    if (not re.match(r'^/download/(?:web|direct)/', direct_path, re.I)
+            and re.fullmatch(r'[a-f0-9-]{8,80}', file_id, re.I)
+            and re.fullmatch(r'[a-z0-9-]+', server, re.I)):
         direct_url = f'https://{server}.gofile.io/download/web/{file_id}/{urllib.parse.quote(file_name)}'
     code = str(data.get('parentFolderCode') or data.get('code') or '')
     download_page = data.get('downloadPage') or (f'https://gofile.io/d/{code}' if re.fullmatch(r'[-A-Za-z0-9]{6,20}', code) else '')
@@ -400,6 +432,7 @@ def upload_gofile(file_path):
         raise ValueError('O GoFile não retornou metadados válidos para a versão editada.')
     return {
         'fileId': file_id,
+        'server': server,
         'name': file_name,
         'size': os.path.getsize(file_path),
         'directUrl': direct_url,

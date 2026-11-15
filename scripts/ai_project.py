@@ -25,7 +25,7 @@ MAX_TARGET_CHARS = 16_000
 MAX_CONTEXT_CHARS = 2_500
 MAX_EDIT_OPERATIONS = 20
 GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
-GOFILE_UPLOAD_URL = 'https://upload.gofile.io/uploadfile'
+GOFILE_UPLOAD_URL = 'https://upload.gofile.is/uploadfile'
 
 
 def valid_gofile_url(url):
@@ -64,12 +64,12 @@ def download_source(url, output_path, guest_token, file_id='', file_code='', ser
         raise ValueError('A credencial Guest da source está ausente ou inválida.')
 
     candidates = [url]
+    if re.fullmatch(r'[A-Za-z0-9_-]{6,32}', file_code or ''):
+        candidates.extend((f'https://gofile.is/dl/{file_code}', f'https://gofile.io/dl/{file_code}'))
     if (re.fullmatch(r'[a-f0-9-]{8,80}', file_id or '', re.I)
             and re.fullmatch(r'[a-z0-9-]+', server or '', re.I)):
         filename = urllib.parse.quote(file_name or 'project.zip')
         candidates.append(f'https://{server}.gofile.io/download/web/{file_id}/{filename}')
-    if re.fullmatch(r'[A-Za-z0-9_-]{6,32}', file_code or ''):
-        candidates.extend((f'https://gofile.io/dl/{file_code}', f'https://gofile.is/dl/{file_code}'))
     candidates = list(dict.fromkeys(candidate for candidate in candidates if candidate))
 
     def fetch_zip(candidate, depth=0):
@@ -440,15 +440,15 @@ def upload_gofile(file_path):
         direct_path = urllib.parse.urlparse(direct_url).path
     except ValueError:
         direct_path = ''
-    if not (re.match(r'^/download/(?:web|direct)/', direct_path, re.I)
-            or re.match(r'^/dl/[A-Za-z0-9_-]{6,32}/?$', direct_path, re.I)):
+    if re.fullmatch(r'[A-Za-z0-9_-]{6,32}', file_code):
+        direct_url = f'https://gofile.is/dl/{file_code}'
+    elif not (re.match(r'^/download/(?:web|direct)/', direct_path, re.I)
+              or re.match(r'^/dl/[A-Za-z0-9_-]{6,32}/?$', direct_path, re.I)):
         if (re.fullmatch(r'[a-f0-9-]{8,80}', file_id, re.I)
                 and re.fullmatch(r'[a-z0-9-]+', server, re.I)):
             direct_url = f'https://{server}.gofile.io/download/web/{file_id}/{urllib.parse.quote(file_name)}'
-        elif re.fullmatch(r'[A-Za-z0-9_-]{6,32}', file_code):
-            direct_url = f'https://gofile.io/dl/{file_code}'
-    code = str(data.get('parentFolderCode') or data.get('code') or '')
-    download_page = data.get('downloadPage') or (f'https://gofile.io/d/{code}' if re.fullmatch(r'[-A-Za-z0-9]{6,20}', code) else '')
+    code = str(data.get('parentFolderCode') or file_code or '')
+    download_page = data.get('downloadPage') or (f'https://gofile.is/d/{code}' if re.fullmatch(r'[-A-Za-z0-9]{6,20}', code) else '')
     guest_token = data.get('guestToken') or data.get('token') or ''
     try:
         direct_path = urllib.parse.urlparse(direct_url).path

@@ -29,7 +29,7 @@ class MultipartFile:
         return b''
 
 body = MultipartFile()
-req = urllib.request.Request('https://upload.gofile.io/uploadfile', data=body,
+req = urllib.request.Request('https://upload.gofile.is/uploadfile', data=body,
     headers={'Content-Type': f'multipart/form-data; boundary={boundary}',
              'Content-Length': str(body.length), 'User-Agent': 'AuroraBuildUploader/2.0'}, method='POST')
 try:

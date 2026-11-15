@@ -177,8 +177,8 @@ async function zipUploadRoute(request,env){
   items.unshift({id,original_file:stored,summary:`ZIP enviado pelo portal: ${safeName}`,status:'approved',created:new Date().toISOString()});
   await env.TICKETS.put(key,JSON.stringify(items.slice(0,30)));
   session.uploads=Number(session.uploads||0)+1;await env.TICKETS.put(`zip-upload:${token}`,JSON.stringify(session),{expirationTtl:86400});
-  try{await discord(env,`/channels/${session.channel_id}/messages`,{method:'POST',body:JSON.stringify({content:`📦 ZIP de ${formatFileSize(uploadedSize)} recebido pelo portal e salvo no GoFile. Source: \`${id}\`\nUse /editar para indexar ZIPs de até 600 MB (3 GB descompactados).`,allowed_mentions:{parse:[]}})})}catch(e){console.error('Upload notice:',String(e.message))}
-  return respond({ok:true,title:'ZIP recebido!',message:'Seu projeto foi salvo no GoFile e adicionado às Sources do ticket. Use /editar para indexar ZIPs de até 600 MB (3 GB descompactados).'});
+  try{await discord(env,`/channels/${session.channel_id}/messages`,{method:'POST',body:JSON.stringify({content:`📦 ZIP de ${formatFileSize(uploadedSize)} recebido pelo portal e salvo no GoFile. Source: \`${id}\`\nUse /editar para indexar ZIPs de até 600 MB (3 GB descompactados). Se acabou de enviar e ainda não aparecer, aguarde até 1 minuto e tente novamente neste ticket.`,allowed_mentions:{parse:[]}})})}catch(e){console.error('Upload notice:',String(e.message))}
+  return respond({ok:true,title:'ZIP recebido!',message:'Seu projeto foi salvo no GoFile e adicionado às Sources do ticket. Use /editar para indexar ZIPs de até 600 MB (3 GB descompactados). Se acabou de enviar e não aparecer, aguarde até 1 minuto e tente novamente neste ticket; não precisa reenviar.'});
  }catch(e){console.error('Portal ZIP / GoFile:',String(e.message));return respond({ok:false,error:'O ZIP foi enviado, mas não consegui associá-lo ao ticket. Use /sources para verificar ou gere um novo link.'},500)}
 }
 async function importSource(i,env,url){
@@ -256,9 +256,9 @@ async function editSourceMenu(i,env){
  const owner=await env.TICKETS.get(`owner:${i.channel_id}`);
  if(!owner)return reply('Use /editar dentro de um ticket.',true);
  if(owner!==uid(i))return reply('Somente o dono do ticket pode editar suas sources.',true);
- const items=JSON.parse(await env.TICKETS.get(`sources:${i.channel_id}:${owner}`)||'[]');
+ const items=JSON.parse(await env.TICKETS.get(`sources:${i.channel_id}:${owner}`,{cacheTtl:30})||'[]');
  const eligible=items.filter(x=>x.status==='approved');
- if(!eligible.length)return reply('📂 Nenhuma source aprovada neste ticket. Use /enviar-zip para enviar um projeto grande ou /importar com um link direto menor.',true);
+ if(!eligible.length)return reply('📂 Não encontrei uma source nesta leitura. Se o portal confirmou o upload há pouco, aguarde até 1 minuto e tente /editar novamente no mesmo ticket. Não precisa reenviar o ZIP.',true);
  return Response.json({type:4,data:{flags:64,content:'🧠 **Aurora AI — Escolha a source que deseja editar:**',components:[{type:1,components:[{type:3,custom_id:'aurora_edit_select',placeholder:'Selecione uma source deste ticket',min_values:1,max_values:1,options:eligible.slice(0,25).map((x,n)=>({label:`Source ${n+1} • ${x.id.slice(0,8)}`,description:(x.summary||'Projeto salvo').slice(0,90),value:x.id}))}]}]}});
 }
 async function editSelection(i,env,ctx,workerUrl=''){

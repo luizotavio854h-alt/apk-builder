@@ -32,7 +32,7 @@ def valid_gofile_url(url):
     parsed = urllib.parse.urlparse(url or '')
     host = (parsed.hostname or '').lower().rstrip('.')
     return (parsed.scheme == 'https' and not parsed.username and not parsed.password
-            and (host == 'gofile.io' or host.endswith('.gofile.io')))
+            and any(host == root or host.endswith('.' + root) for root in ('gofile.io', 'gofile.is')))
 
 
 def check_public_url(url):
@@ -59,9 +59,19 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
 OPENER = urllib.request.build_opener(SafeRedirect)
 
 
-def download_source(url, output_path, guest_token):
+def download_source(url, output_path, guest_token, file_id='', file_code='', server='', file_name=''):
     if not re.fullmatch(r'[-A-Za-z0-9._~]{12,4096}', guest_token or ''):
         raise ValueError('A credencial Guest da source está ausente ou inválida.')
+
+    candidates = [url]
+    if (re.fullmatch(r'[a-f0-9-]{8,80}', file_id or '', re.I)
+            and re.fullmatch(r'[a-z0-9-]+', server or '', re.I)):
+        filename = urllib.parse.quote(file_name or 'project.zip')
+        candidates.append(f'https://{server}.gofile.io/download/web/{file_id}/{filename}')
+    if re.fullmatch(r'[A-Za-z0-9_-]{6,32}', file_code or ''):
+        candidates.extend((f'https://gofile.io/dl/{file_code}', f'https://gofile.is/dl/{file_code}'))
+    candidates = list(dict.fromkeys(candidate for candidate in candidates if candidate))
+
     def fetch_zip(candidate, depth=0):
         if depth > 3:
             raise ValueError('O GoFile redirecionou várias vezes sem entregar o ZIP.')
@@ -70,7 +80,8 @@ def download_source(url, output_path, guest_token):
             candidate,
             headers={'User-Agent': 'Mozilla/5.0 (compatible; AuroraAndroidEngine/1.0)',
                      'Accept': 'application/octet-stream,application/zip,*/*',
-                     'Referer': 'https://gofile.io/', 'Cookie': f'accountToken={guest_token}'},
+                     'Referer': 'https://gofile.io/', 'Authorization': f'Bearer {guest_token}',
+                     'Cookie': f'accountToken={guest_token}'},
         )
         with OPENER.open(request, timeout=120) as response:
             final_url = response.geturl()
@@ -112,10 +123,18 @@ def download_source(url, output_path, guest_token):
             detail = f'Content-Type {content_type or "desconhecido"} em {safe_location.hostname}{safe_location.path}'
             raise ValueError(f'O GoFile respondeu sem os bytes do ZIP ({detail}). Confira se a source ainda está pública e tente enviar novamente pelo portal.')
 
-    total = fetch_zip(url)
-    if not zipfile.is_zipfile(output_path):
-        raise ValueError('O arquivo baixado está incompleto ou não é um ZIP válido.')
-    return total
+    last_error = None
+    for candidate in candidates:
+        try:
+            total = fetch_zip(candidate)
+            if not zipfile.is_zipfile(output_path):
+                raise ValueError('O arquivo baixado está incompleto ou não é um ZIP válido.')
+            return total
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+            last_error = error
+    if last_error:
+        raise last_error
+    raise ValueError('Não consegui localizar um endereço direto para baixar esta source no GoFile.')
 
 
 def safe_member_name(name):
@@ -413,6 +432,7 @@ def upload_gofile(file_path):
         raise ValueError('O GoFile recusou o upload da versão editada.')
     data = result.get('data') or {}
     file_id = str(data.get('id') or '')
+    file_code = str(data.get('code') or '')
     file_name = str(data.get('name') or pathlib.Path(file_path).name)
     server = str(data.get('serverSelected') or next(iter(data.get('servers') or []), ''))
     direct_url = data.get('link') or ''
@@ -420,19 +440,31 @@ def upload_gofile(file_path):
         direct_path = urllib.parse.urlparse(direct_url).path
     except ValueError:
         direct_path = ''
-    if (not re.match(r'^/download/(?:web|direct)/', direct_path, re.I)
-            and re.fullmatch(r'[a-f0-9-]{8,80}', file_id, re.I)
-            and re.fullmatch(r'[a-z0-9-]+', server, re.I)):
-        direct_url = f'https://{server}.gofile.io/download/web/{file_id}/{urllib.parse.quote(file_name)}'
+    if not (re.match(r'^/download/(?:web|direct)/', direct_path, re.I)
+            or re.match(r'^/dl/[A-Za-z0-9_-]{6,32}/?$', direct_path, re.I)):
+        if (re.fullmatch(r'[a-f0-9-]{8,80}', file_id, re.I)
+                and re.fullmatch(r'[a-z0-9-]+', server, re.I)):
+            direct_url = f'https://{server}.gofile.io/download/web/{file_id}/{urllib.parse.quote(file_name)}'
+        elif re.fullmatch(r'[A-Za-z0-9_-]{6,32}', file_code):
+            direct_url = f'https://gofile.io/dl/{file_code}'
     code = str(data.get('parentFolderCode') or data.get('code') or '')
     download_page = data.get('downloadPage') or (f'https://gofile.io/d/{code}' if re.fullmatch(r'[-A-Za-z0-9]{6,20}', code) else '')
     guest_token = data.get('guestToken') or data.get('token') or ''
+    try:
+        direct_path = urllib.parse.urlparse(direct_url).path
+    except ValueError:
+        direct_path = ''
+    is_download_url = (re.match(r'^/download/(?:web|direct)/', direct_path, re.I)
+                       or re.match(r'^/dl/[A-Za-z0-9_-]{6,32}/?$', direct_path, re.I))
     if (not re.fullmatch(r'[a-f0-9-]{8,80}', file_id, re.I) or not valid_gofile_url(direct_url)
+            or not is_download_url
             or not valid_gofile_url(download_page) or not re.fullmatch(r'[-A-Za-z0-9._~]{12,4096}', guest_token)):
-        raise ValueError('O GoFile não retornou metadados válidos para a versão editada.')
+        raise ValueError('O GoFile não retornou um link direto e válido para a versão editada.')
     return {
         'fileId': file_id,
+        'fileCode': file_code,
         'server': server,
+        'servers': data.get('servers') if isinstance(data.get('servers'), list) else [],
         'name': file_name,
         'size': os.path.getsize(file_path),
         'directUrl': direct_url,
@@ -483,7 +515,14 @@ def source_metadata(job_id):
     guest_token = result.get('guest_token', '')
     if not valid_gofile_url(source_url) or not re.fullmatch(r'[-A-Za-z0-9._~]{12,4096}', guest_token):
         raise ValueError('O Worker retornou dados Guest inválidos para a source.')
-    return source_url, guest_token
+    return {
+        'source_url': source_url,
+        'guest_token': guest_token,
+        'file_id': str(result.get('file_id') or ''),
+        'file_code': str(result.get('file_code') or ''),
+        'server': str(result.get('server') or ''),
+        'file_name': str(result.get('file_name') or ''),
+    }
 
 
 def base_payload(status, error=''):
@@ -504,11 +543,13 @@ def main():
     source_id = os.environ.get('AURORA_SOURCE_ID', '')
     if task not in ('index', 'edit') or not job_id or not source_id:
         raise ValueError('Dados inválidos para indexar ou editar a source.')
-    source_url, guest_token = source_metadata(job_id)
+    source = source_metadata(job_id)
     os.makedirs('workspace', exist_ok=True)
     zip_path = 'workspace/project-source.zip'
     print('Baixando source do GoFile...', flush=True)
-    archive_size = download_source(source_url, zip_path, guest_token)
+    archive_size = download_source(
+        source['source_url'], zip_path, source['guest_token'], source['file_id'],
+        source['file_code'], source['server'], source['file_name'])
     if task == 'index':
         with zipfile.ZipFile(zip_path) as archive:
             members, total_unpacked = inspect_archive(archive)

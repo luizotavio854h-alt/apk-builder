@@ -19,7 +19,7 @@ Configure o mesmo valor de `CALLBACK_SECRET` nos secrets do GitHub Actions e no 
 
 ### Configurar servidores e canais pelo Discord
 
-Convide o bot para cada servidor usando os escopos `bot` e `applications.commands`. Depois faça `/registrar` uma vez: os comandos ficam globais e aparecem nos servidores em que a aplicação está instalada.
+Convide o bot para cada servidor usando os escopos `bot` e `applications.commands`. Depois faça `/registrar`: os comandos ficam globais e o registro limpa comandos locais antigos com nomes iguais nos servidores oficial, atual e já cadastrados. Se houver duplicatas em outro servidor, execute `/registrar` também nele.
 
 No servidor oficial Aurora Network, um administrador pode executar `/adicionar-servidor servidor:<ID>` para registrar outro servidor. O bot precisa já ter sido convidado para o destino. Em seguida, um administrador do servidor adicionado executa `/configurar-servidor` e escolhe as categorias/canais nos menus do Discord:
 

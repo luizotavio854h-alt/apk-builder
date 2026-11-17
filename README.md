@@ -11,12 +11,14 @@ npm run deploy
 ```
 
 O Worker usa o namespace KV `TICKETS`. Configure os secrets e variáveis descritos em [CONFIGURACAO.md](CONFIGURACAO.md).
+Para instalar os comandos e canais em mais de um servidor Discord, preencha `DISCORD_SERVERS_JSON` em `wrangler.toml`; `/registrar` atualiza todos os servidores cadastrados.
 
 ## Envio e compilacao
 
 Dentro de um ticket, use `/enviar-zip` para abrir o portal privado de upload. O navegador envia o ZIP diretamente ao GoFile, com limite de 20 GB, sem passar o arquivo pelo Worker. `/importar` por link público e a leitura do ZIP pela Aurora AI continuam limitados a 12 MB, pois essas rotas ainda processam o arquivo no Worker.
 
 Use `/editar` para pedir alterações pela Aurora AI e `/compilar` para gerar o APK. O workflow `.github/workflows/engine.yml` acompanha a build, envia o APK ao GoFile Guest e atualiza a mensagem do ticket.
+Se uma compilação falhar, o bot também anexa ao ticket um `aurora-build-XXXXXXXX.txt` com o diagnóstico e os trechos finais dos logs.
 
 ## Tickets
 

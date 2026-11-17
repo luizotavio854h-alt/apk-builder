@@ -10,11 +10,39 @@ Para editar com IA, `/editar` baixa e indexa o ZIP no GitHub Actions, lista todo
 
 Mantenha o namespace KV `TICKETS`. Configure os seguintes secrets e variáveis:
 
-- Já existentes: `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, `CALLBACK_SECRET`, `GITHUB_TOKEN`, `GITHUB_USER`, `GITHUB_REPO`, `GITHUB_REF`, `DISCORD_APPLICATION_ID`, `DISCORD_GUILD_ID`, `REGISTER_SECRET`.
-- Tickets de compilacao: `TICKET_CATEGORY_ID`.
-- Atendimento comum: `SUPPORT_CATEGORY_ID`, `SUPPORT_PANEL_CHANNEL_ID` e, opcionalmente, `STAFF_ROLE_ID` e `SUPPORT_LOG_CHANNEL_ID`.
+- Secrets: `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, `CALLBACK_SECRET`, `GITHUB_TOKEN` e `REGISTER_SECRET`.
+- Variáveis gerais: `DISCORD_APPLICATION_ID`, `GITHUB_USER`, `GITHUB_REPO`, `GITHUB_REF`.
+- Servidores e destinos Discord: `DISCORD_SERVERS_JSON`, definido em `wrangler.toml` na seção `[vars]`.
 
 Configure o mesmo valor de `CALLBACK_SECRET` nos secrets do GitHub Actions e no Worker. Nenhum token GoFile precisa ser configurado.
+
+### Adicionar um ou mais servidores Discord
+
+Edite `DISCORD_SERVERS_JSON` em `wrangler.toml`. Use um objeto para cada servidor. Exemplo de um servidor:
+
+```toml
+DISCORD_SERVERS_JSON = '[{"guild_id":"ID_DO_SERVIDOR","ticket_category_id":"ID_CATEGORIA_COMPILACAO","build_panel_channel_id":"ID_CANAL_PAINEL_APK","support_category_id":"ID_CATEGORIA_SUPORTE","support_panel_channel_id":"ID_CANAL_PAINEL_SUPORTE","support_log_channel_id":"ID_CANAL_LOG","staff_role_id":"ID_CARGO_EQUIPE"}]'
+```
+
+Para adicionar outro servidor, coloque outro objeto na mesma lista JSON, separado por vírgula. Cada servidor tem seus próprios IDs; não reutilize as categorias, canais ou cargos do primeiro servidor.
+
+- `guild_id`: ID do servidor.
+- `ticket_category_id`: categoria onde `/build-ticket` cria tickets para APK.
+- `build_panel_channel_id`: canal onde `/setup-ticket` publica o painel de compilação. Se omitido, o painel aparece no canal onde o comando foi usado.
+- `support_category_id`: categoria onde os atendimentos de `/ticket` são criados.
+- `support_panel_channel_id`: canal onde `/ticket` publica o painel de suporte.
+- `support_log_channel_id`: canal privado opcional para os registros de atendimentos fechados.
+- `staff_role_id`: cargo opcional que também pode ver os tickets.
+
+Ative o **Modo Desenvolvedor** no Discord e use **Copiar ID** ao clicar com o botão direito no servidor, categoria, canal ou cargo. Depois salve `wrangler.toml` e faça o deploy do Worker. Execute `/registrar` uma vez em qualquer servidor configurado: os comandos serão registrados em todos os servidores listados.
+
+O bot ainda precisa ser convidado para cada servidor usando a mesma aplicação, com os escopos `bot` e `applications.commands`. Para criar tickets, conceda ao bot permissões de ver canais, enviar mensagens, incorporar links, anexar arquivos, ler histórico e gerenciar canais.
+
+`DISCORD_GUILD_ID`, `TICKET_CATEGORY_ID`, `SUPPORT_CATEGORY_ID`, `SUPPORT_PANEL_CHANNEL_ID`, `SUPPORT_LOG_CHANNEL_ID` e `STAFF_ROLE_ID` continuam aceitos como configuração antiga de um único servidor quando `DISCORD_SERVERS_JSON` está vazio.
+
+### Arquivo de diagnóstico da compilação
+
+Se a build falhar, o workflow gera `build_failure.txt` com os trechos finais do log e o link da execução. O Worker envia esse `.txt` como anexo no canal do ticket junto com a mensagem de falha. O envio remove padrões comuns de tokens e chaves antes de anexar o relatório.
 
 ## GitHub Actions
 

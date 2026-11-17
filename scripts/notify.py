@@ -42,8 +42,15 @@ if status == 'success':
     payload['download_url'] = link
 else:
     failure_file = __import__('pathlib').Path('build_failure.txt')
-    details = failure_file.read_text(encoding='utf-8').strip() if failure_file.exists() else ''
-    payload['error'] = (details or ('Compilação não concluída (' + result + '). Consulte os logs da execução.'))[:850]
+    details = failure_file.read_text(encoding='utf-8', errors='replace').strip() if failure_file.exists() else ''
+    details = details or ('Compilação não concluída (' + result + '). Consulte os logs da execução.')
+    report = details
+    if run_url and run_url not in report:
+        report += '\n\nExecução no GitHub Actions: ' + run_url
+    if artifact_url and artifact_url not in report:
+        report += '\nArtefatos e logs: ' + artifact_url
+    payload['error'] = details[-850:]
+    payload['diagnostic'] = report[-18000:]
 
 request = urllib.request.Request(
     worker + '/build-callback',

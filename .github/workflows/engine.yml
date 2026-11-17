@@ -231,11 +231,39 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Save concise failure reason
+      - name: Generate failure report
         if: failure()
+        env:
+          AURORA_BUILD_ID: ${{ inputs.build_id }}
         shell: bash
         run: |
-          echo "Falha de compilação/publicação. Consulte o artefato Aurora-Build-Logs e a etapa com erro nesta execução." > build_failure.txt
+          {
+            echo "AURORA ANDROID ENGINE - RELATÓRIO DE FALHA"
+            echo "Build Aurora: ${AURORA_BUILD_ID:-desconhecida}"
+            echo "Execução GitHub: ${GITHUB_RUN_ID:-desconhecida}"
+            echo "Resultado: falha na compilação ou publicação do APK"
+            echo "Execução: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            if [[ -s build.log ]]; then
+              echo "===== SAÍDA RECENTE DA COMPILAÇÃO (build.log) ====="
+              tail -n 100 build.log | sed -E \
+                -e 's/(gh[pousr]_[A-Za-z0-9_]{20,})/[TOKEN REMOVIDO]/g' \
+                -e 's/(Bearer )[[:graph:]]+/\1[TOKEN REMOVIDO]/Ig' \
+                -e 's/((token|secret|password|api[_-]?key)[[:space:]]*[:=][[:space:]]*)[^[:space:]]+/\1[REMOVIDO]/Ig'
+              echo
+            fi
+            if [[ -s workspace/download-debug.txt ]]; then
+              echo "===== SAÍDA RECENTE DO DOWNLOAD (download-debug.txt) ====="
+              tail -n 70 workspace/download-debug.txt | sed -E \
+                -e 's/(gh[pousr]_[A-Za-z0-9_]{20,})/[TOKEN REMOVIDO]/g' \
+                -e 's/(Bearer )[[:graph:]]+/\1[TOKEN REMOVIDO]/Ig' \
+                -e 's/((token|secret|password|api[_-]?key)[[:space:]]*[:=][[:space:]]*)[^[:space:]]+/\1[REMOVIDO]/Ig'
+              echo
+            fi
+            if [[ ! -s build.log && ! -s workspace/download-debug.txt ]]; then
+              echo "O workflow falhou antes de gerar logs da compilação. Abra a execução no GitHub Actions para ver qual etapa falhou."
+            fi
+          } > build_failure.txt
       - name: Upload failure reason
         if: failure()
         uses: actions/upload-artifact@v4

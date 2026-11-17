@@ -11,7 +11,7 @@ Para editar com IA, `/editar` baixa e indexa o ZIP no GitHub Actions, lista todo
 Mantenha o namespace KV `TICKETS`. Configure os seguintes secrets e variáveis:
 
 - Secrets: `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, `CALLBACK_SECRET`, `GITHUB_TOKEN` e `REGISTER_SECRET`.
-- Variáveis gerais: `DISCORD_APPLICATION_ID`, `GITHUB_USER`, `GITHUB_REPO`, `GITHUB_REF`.
+- Variáveis gerais: `GITHUB_USER`, `GITHUB_REPO`, `GITHUB_REF`; `DISCORD_APPLICATION_ID` é opcional porque `/registrar` usa o ID enviado pelo próprio Discord (a rota administrativa `/admin/register` ainda precisa dessa variável).
 - IDs antigos do servidor principal (opcionais): `TICKET_CATEGORY_ID`, `SUPPORT_CATEGORY_ID`, `SUPPORT_PANEL_CHANNEL_ID`, `SUPPORT_LOG_CHANNEL_ID`, `STAFF_ROLE_ID`.
 
 Configure o mesmo valor de `CALLBACK_SECRET` nos secrets do GitHub Actions e no Worker. Nenhum token GoFile precisa ser configurado.

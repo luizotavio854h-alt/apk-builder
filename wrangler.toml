@@ -9,7 +9,6 @@ GITHUB_REPO = "apk-builder"
 GITHUB_REF = "main"
 HF_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 TICKET_CATEGORY_ID = "1510734520553308160"
-DISCORD_SERVERS_JSON = '[]'
 
 [[kv_namespaces]]
 binding = "TICKETS"

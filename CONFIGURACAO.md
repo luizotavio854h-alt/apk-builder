@@ -12,33 +12,26 @@ Mantenha o namespace KV `TICKETS`. Configure os seguintes secrets e variáveis:
 
 - Secrets: `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, `CALLBACK_SECRET`, `GITHUB_TOKEN` e `REGISTER_SECRET`.
 - Variáveis gerais: `DISCORD_APPLICATION_ID`, `GITHUB_USER`, `GITHUB_REPO`, `GITHUB_REF`.
-- Servidores e destinos Discord: `DISCORD_SERVERS_JSON`, definido em `wrangler.toml` na seção `[vars]`.
+- IDs antigos do servidor principal (opcionais): `TICKET_CATEGORY_ID`, `SUPPORT_CATEGORY_ID`, `SUPPORT_PANEL_CHANNEL_ID`, `SUPPORT_LOG_CHANNEL_ID`, `STAFF_ROLE_ID`.
 
 Configure o mesmo valor de `CALLBACK_SECRET` nos secrets do GitHub Actions e no Worker. Nenhum token GoFile precisa ser configurado.
 
-### Adicionar um ou mais servidores Discord
+### Configurar servidores e canais pelo Discord
 
-Edite `DISCORD_SERVERS_JSON` em `wrangler.toml`. Use um objeto para cada servidor. Exemplo de um servidor:
+Convide o bot para cada servidor usando os escopos `bot` e `applications.commands`. Depois faça `/registrar` uma vez: os comandos ficam globais e aparecem nos servidores em que a aplicação está instalada.
 
-```toml
-DISCORD_SERVERS_JSON = '[{"guild_id":"ID_DO_SERVIDOR","ticket_category_id":"ID_CATEGORIA_COMPILACAO","build_panel_channel_id":"ID_CANAL_PAINEL_APK","support_category_id":"ID_CATEGORIA_SUPORTE","support_panel_channel_id":"ID_CANAL_PAINEL_SUPORTE","support_log_channel_id":"ID_CANAL_LOG","staff_role_id":"ID_CARGO_EQUIPE"}]'
-```
+Em cada servidor, um administrador executa `/configurar-servidor` e escolhe as categorias/canais nos próprios menus do Discord:
 
-Para adicionar outro servidor, coloque outro objeto na mesma lista JSON, separado por vírgula. Cada servidor tem seus próprios IDs; não reutilize as categorias, canais ou cargos do primeiro servidor.
+- `categoria-build`: onde `/build-ticket` cria os tickets de APK.
+- `canal-painel-apk`: onde `/setup-ticket` publica o painel de compilação. Opcional; se vazio, `/setup-ticket` publica no canal atual.
+- `categoria-suporte`: onde `/ticket` cria atendimentos privados.
+- `canal-painel-suporte`: onde `/ticket` publica o painel de atendimento.
+- `canal-logs`: canal privado opcional que recebe registros de atendimentos fechados.
+- `cargo-equipe`: cargo opcional com acesso aos tickets.
 
-- `guild_id`: ID do servidor.
-- `ticket_category_id`: categoria onde `/build-ticket` cria tickets para APK.
-- `build_panel_channel_id`: canal onde `/setup-ticket` publica o painel de compilação. Se omitido, o painel aparece no canal onde o comando foi usado.
-- `support_category_id`: categoria onde os atendimentos de `/ticket` são criados.
-- `support_panel_channel_id`: canal onde `/ticket` publica o painel de suporte.
-- `support_log_channel_id`: canal privado opcional para os registros de atendimentos fechados.
-- `staff_role_id`: cargo opcional que também pode ver os tickets.
+O comando salva a configuração separada por servidor no KV `TICKETS`; use-o novamente em cada servidor para escolher destinos diferentes. Sem opções, ele mostra o estado atual; passe apenas as opções que deseja alterar para manter as demais. Conceda ao bot permissões de ver canais, enviar mensagens, incorporar links, anexar arquivos, ler histórico e gerenciar canais.
 
-Ative o **Modo Desenvolvedor** no Discord e use **Copiar ID** ao clicar com o botão direito no servidor, categoria, canal ou cargo. Depois salve `wrangler.toml` e faça o deploy do Worker. Execute `/registrar` uma vez em qualquer servidor configurado: os comandos serão registrados em todos os servidores listados.
-
-O bot ainda precisa ser convidado para cada servidor usando a mesma aplicação, com os escopos `bot` e `applications.commands`. Para criar tickets, conceda ao bot permissões de ver canais, enviar mensagens, incorporar links, anexar arquivos, ler histórico e gerenciar canais.
-
-`DISCORD_GUILD_ID`, `TICKET_CATEGORY_ID`, `SUPPORT_CATEGORY_ID`, `SUPPORT_PANEL_CHANNEL_ID`, `SUPPORT_LOG_CHANNEL_ID` e `STAFF_ROLE_ID` continuam aceitos como configuração antiga de um único servidor quando `DISCORD_SERVERS_JSON` está vazio.
+As variáveis antigas de categoria/canal do Worker continuam servindo como padrão inicial. Depois que `/configurar-servidor` é usado, os destinos salvos no KV daquele servidor têm prioridade.
 
 ### Arquivo de diagnóstico da compilação
 

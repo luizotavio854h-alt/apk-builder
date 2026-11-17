@@ -11,7 +11,7 @@ npm run deploy
 ```
 
 O Worker usa o namespace KV `TICKETS`. Configure os secrets e variáveis descritos em [CONFIGURACAO.md](CONFIGURACAO.md).
-Para instalar os comandos e canais em mais de um servidor Discord, preencha `DISCORD_SERVERS_JSON` em `wrangler.toml`; `/registrar` atualiza todos os servidores cadastrados.
+Execute `/registrar` para publicar os comandos globais e, em cada servidor, `/configurar-servidor` para escolher categorias, canais e cargo da equipe nos menus do Discord.
 
 ## Envio e compilacao
 

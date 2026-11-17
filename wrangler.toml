@@ -8,6 +8,7 @@ GITHUB_USER = "luizotavio854h-alt"
 GITHUB_REPO = "apk-builder"
 GITHUB_REF = "main"
 HF_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
+DISCORD_GUILD_ID = "1374068088496062545"
 TICKET_CATEGORY_ID = "1510734520553308160"
 
 [[kv_namespaces]]

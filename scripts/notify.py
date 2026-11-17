@@ -68,7 +68,8 @@ try:
         print('Aurora Worker callback:', response.status)
 except urllib.error.HTTPError as e:
     print('Aurora Worker callback failed:', e.code, file=sys.stderr)
-    if e.code == 403 and ('1010' in body or 'error code: 1010' in body.lower()):
+    response_body = e.read().decode('utf-8', errors='replace').lower()
+    if e.code == 403 and ('1010' in response_body or 'error code: 1010' in response_body):
         print('Cloudflare security blocked the GitHub Actions HTTP client (1010).', file=sys.stderr)
         print('Check Cloudflare Security Events for the blocked request and configure a narrowly scoped exception for /build-callback if appropriate.', file=sys.stderr)
         print('Do not disable global security or expose CALLBACK_SECRET.', file=sys.stderr)
